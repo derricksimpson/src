@@ -1,3 +1,6 @@
+FOR FUTURE REFERENCE ONLY - NO NOT IMPLEMENT!
+
+
 src desc uses advanced LLM models to provide a high level overview of the file (while caching the results in a .src/{path} folder), including high level - striaght to the point - succinct summary, and key sections (per specific file type, like JS, TS, C#, etc.).
 
 

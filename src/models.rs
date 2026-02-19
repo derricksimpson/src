@@ -1,0 +1,59 @@
+use std::fmt;
+
+pub struct MetaInfo {
+    pub elapsed_ms: u128,
+    pub timeout: bool,
+    pub files_scanned: usize,
+    pub files_matched: usize,
+}
+
+pub struct FileChunk {
+    pub start_line: usize,
+    pub end_line: usize,
+    pub content: String,
+}
+
+pub struct FileEntry {
+    pub path: String,
+    pub contents: Option<String>,
+    pub error: Option<String>,
+    pub chunks: Option<Vec<FileChunk>>,
+}
+
+pub struct ScanResult {
+    pub name: String,
+    pub children: Option<Vec<ScanResult>>,
+    pub files: Option<Vec<String>>,
+}
+
+pub struct GraphEntry {
+    pub file: String,
+    pub imports: Vec<String>,
+}
+
+pub struct OutputEnvelope {
+    pub meta: Option<MetaInfo>,
+    pub files: Option<Vec<FileEntry>>,
+    pub tree: Option<ScanResult>,
+    pub graph: Option<Vec<GraphEntry>>,
+    pub error: Option<String>,
+}
+
+impl fmt::Display for MetaInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "meta:\n")?;
+        if self.elapsed_ms != 0 {
+            write!(f, "  elapsedMs: {}\n", self.elapsed_ms)?;
+        }
+        if self.timeout {
+            write!(f, "  timeout: true\n")?;
+        }
+        if self.files_scanned != 0 {
+            write!(f, "  filesScanned: {}\n", self.files_scanned)?;
+        }
+        if self.files_matched != 0 {
+            write!(f, "  filesMatched: {}\n", self.files_matched)?;
+        }
+        Ok(())
+    }
+}
