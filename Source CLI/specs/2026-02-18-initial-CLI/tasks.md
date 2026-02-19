@@ -1,0 +1,136 @@
+# Implementation Plan
+
+- [ ] 1. Set up project structure, dependencies, and core models
+  - [ ] 1.1 Configure `src.csproj` with dependencies and AOT settings
+    - Add `System.CommandLine` (2.0.0-beta5) and `YamlDotNet` (16.x) NuGet packages
+    - Add `<PublishSingleFile>true</PublishSingleFile>` and `<AssemblyName>src</AssemblyName>` to the property group
+    - Ensure `<PublishAot>true</PublishAot>` and `<InvariantGlobalization>true</InvariantGlobalization>` remain set
+    - _Requirements: 1.6_
+  - [ ] 1.2 Create directory structure and model classes
+    - Create `Models/`, `Commands/`, `Services/`, `Output/` directories
+    - Implement `MetaInfo.cs` — elapsed time, timeout flag, files scanned/matched
+    - Implement `FileEntry.cs` — path, contents, error, chunks
+    - Implement `FileChunk.cs` — start line, end line, content string
+    - Implement `ScanResult.cs` — name, children list, files list (for tree output)
+    - Implement `OutputEnvelope.cs` — meta, files, tree, error (top-level wrapper)
+    - All models should use `init`-only properties and `required` where appropriate
+    - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5_
+
+- [ ] 2. Implement YAML output layer
+  - [ ] 2.1 Create `YamlSerializerContext.cs` with AOT source-generated serializer
+    - Decorate with `[YamlStaticContext]` attribute
+    - Register all model types (`OutputEnvelope`, `MetaInfo`, `FileEntry`, `FileChunk`, `ScanResult`)
+    - _Requirements: 5.1_
+  - [ ] 2.2 Create `YamlOutputWriter.cs`
+    - Build a `StaticSerializerBuilder` using the source-generated context
+    - Configure naming convention (camelCase or snake_case for YAML keys)
+    - Implement `Write(OutputEnvelope result, TextWriter output)` method
+    - Ensure line-numbered content is emitted as YAML literal block scalars (pipe `|` style)
+    - _Requirements: 5.1, 5.2, 5.3, 5.6_
+
+- [ ] 3. Implement exclusion filter and glob matching
+  - [ ] 3.1 Create `ExclusionFilter.cs`
+    - Hardcode default exclusion set: `node_modules`, `.git`, `bin`, `obj`, `dist`, `.vs`, `__pycache__`, `.idea`, `.vscode`, `.svn`, `.hg`, `coverage`, `.next`, `.nuxt`, `target`, `build`, `packages`
+    - Accept additional patterns from `--exclude` option
+    - Support `--no-defaults` flag to clear built-in exclusions
+    - Expose `IsExcluded(string directoryName)` and `IsFileExcluded(string fileName)` methods
+    - _Requirements: 2.4, 2.5, 8.2, 8.3_
+  - [ ] 3.2 Create `GlobMatcher.cs`
+    - Use `FileSystemName.MatchesSimpleExpression` from `System.IO.Enumeration`
+    - Implement `Matches(string fileName, ReadOnlySpan<char> pattern)` static method
+    - Implement `MatchesAny(string fileName, IReadOnlyList<string> patterns)` for multi-pattern support
+    - _Requirements: 3.1, 3.3_
+
+- [ ] 4. Implement FileScanner service (directory and file enumeration)
+  - [ ] 4.1 Create `FileScanner.cs` with directory hierarchy scanning
+    - Implement `ScanDirectoriesAsync(string root, ExclusionFilter filter, CancellationToken ct)`
+    - Recursively enumerate directories, building a `ScanResult` tree
+    - Prune excluded directories early (before recursing into them)
+    - Only include directories that contain at least one source code file (recursively)
+    - Use parallel enumeration via tasks per subdirectory for throughput
+    - _Requirements: 2.1, 2.2, 2.3, 6.1_
+  - [ ] 4.2 Add file enumeration with glob matching to `FileScanner`
+    - Implement `FindFilesAsync(string root, IReadOnlyList<string> globs, ExclusionFilter filter, CancellationToken ct)`
+    - Enumerate files recursively, applying `GlobMatcher` per file
+    - Return flat list of matching absolute file paths
+    - Support parallel directory traversal
+    - _Requirements: 3.1, 3.2, 3.4, 3.5_
+
+- [ ] 5. Implement ContentSearcher service (memory-mapped parallel search)
+  - [ ] 5.1 Create `ContentSearcher.cs` core structure
+    - Implement `SearchAsync(IReadOnlyList<string> filePaths, string pattern, bool isRegex, int padLines, CancellationToken ct)`
+    - Use `SemaphoreSlim` bounded to `2 * Environment.ProcessorCount` for throttled parallelism
+    - Use `Parallel.ForEachAsync` to process files concurrently
+    - _Requirements: 4.1, 6.2, 6.3_
+  - [ ] 5.2 Implement memory-mapped file reading
+    - For files > 64KB: open via `MemoryMappedFile.CreateFromFile` (read-only), read lines via `UnmanagedMemoryStream` + `StreamReader`
+    - For files <= 64KB: fall back to `File.ReadAllLines` to avoid mmap overhead
+    - Detect binary files via null-byte heuristic in first 8KB, skip them
+    - _Requirements: 4.7, 5.7, 6.2_
+  - [ ] 5.3 Implement pattern matching logic
+    - For literal patterns: use `string.Contains` with `StringComparison.OrdinalIgnoreCase`
+    - For regex patterns (--regex flag): pre-compile `Regex` with `RegexOptions.Compiled`
+    - For pipe-delimited patterns (`|`): split into multiple terms, match if any term hits
+    - _Requirements: 4.1, 4.2, 4.3_
+  - [ ] 5.4 Implement context padding and chunk merging
+    - Expand each match by `pad` lines before and after (clamped to file boundaries)
+    - Sort matched ranges, merge overlapping windows into single contiguous chunks
+    - Build `FileChunk` objects with 1-based line-numbered content (format: `{lineNum}.  {lineContent}`)
+    - _Requirements: 4.4, 4.5, 4.6, 5.2_
+  - [ ] 5.5 Implement per-file error handling in search
+    - Wrap each file's processing in try/catch
+    - On error (permission denied, locked, etc.), produce a `FileEntry` with the `error` field set
+    - Continue processing remaining files
+    - _Requirements: 5.6_
+
+- [ ] 6. Wire up CLI commands with System.CommandLine
+  - [ ] 6.1 Rewrite `Program.cs` with `RootCommand` setup
+    - Define all global options: `--root`, `--r`, `--f`, `--pad`, `--timeout`, `--exclude`, `--no-defaults`, `--regex`, `--version`
+    - Configure `RootCommand` handler to dispatch to the appropriate command based on which options are present
+    - Set up `Console.CancelKeyPress` handler for graceful SIGINT cancellation
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 8.1, 8.4, 8.5_
+  - [ ] 6.2 Implement `ScanCommand.cs`
+    - Handler for directory-only mode (no `--r`, no `--f`): call `FileScanner.ScanDirectoriesAsync`, wrap in `OutputEnvelope`, write YAML
+    - Handler for file-listing mode (`--r` only): call `FileScanner.FindFilesAsync`, build `FileEntry` list (path only), wrap in `OutputEnvelope`, write YAML
+    - Create `CancellationTokenSource` from `--timeout` if provided
+    - Capture elapsed time in `MetaInfo`
+    - _Requirements: 2.1, 2.3, 3.1, 6.4, 6.6_
+  - [ ] 6.3 Implement `SearchCommand.cs`
+    - Handler for content search mode (`--f` present): call `FileScanner.FindFilesAsync` then `ContentSearcher.SearchAsync`
+    - Build `OutputEnvelope` with file entries and meta info
+    - Handle timeout: catch `OperationCanceledException`, return partial results with `meta.timeout: true`
+    - Write YAML output
+    - _Requirements: 4.1, 4.8, 6.4, 6.6_
+
+- [ ] 7. Implement help text and version display
+  - [ ] 7.1 Configure System.CommandLine help and descriptions
+    - Set descriptive text on `RootCommand` and each `Option`
+    - Add usage examples to help text via `HelpBuilder` customization
+    - Include per-mode examples (directory hierarchy, file listing, content search)
+    - _Requirements: 7.1, 7.2, 7.3, 7.4_
+  - [ ] 7.2 Add `--version` handler
+    - Return version from assembly metadata or a hardcoded constant
+    - _Requirements: 1.4_
+
+- [ ] 8. Add exit codes and final integration
+  - [ ] 8.1 Implement exit code logic
+    - Return 0 on success (including empty results)
+    - Return 1 on user error (bad args, bad path, bad regex)
+    - Return 2 on timeout
+    - Return 130 on SIGINT cancellation
+    - Wire exit codes through `RootCommand.InvokeAsync` return value
+    - _Requirements: 1.3, 1.5, 4.8, 8.5_
+  - [ ] 8.2 End-to-end integration pass
+    - Ensure all three modes (dir hierarchy, file listing, content search) work through the full pipeline
+    - Verify YAML output format matches the spec examples from `plan.md`
+    - Verify `--timeout`, `--pad`, `--exclude`, `--no-defaults` all flow correctly through the layers
+    - Ensure the `meta` section is always present with elapsed_ms and file counts
+    - _Requirements: 5.1, 5.4, 5.5, 6.6_
+
+- [ ] 9. Publish configuration and optimization
+  - [ ] 9.1 Add publish profile for single-file AOT
+    - Create or update `Properties/PublishProfiles/release.pubxml` with AOT single-file settings
+    - Add `<TrimMode>link</TrimMode>` for aggressive trimming
+    - Verify the build produces a single `src` (or `src.exe`) binary
+    - Test that the binary runs without .NET runtime installed
+    - _Requirements: 1.6, 6.5_
