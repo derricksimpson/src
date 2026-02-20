@@ -10,6 +10,9 @@ pub struct CliArgs {
     pub line_numbers: bool,
     pub lines: Vec<String>,
     pub graph: bool,
+    pub symbols: bool,
+    pub count: bool,
+    pub stats: bool,
 }
 
 pub enum CliAction {
@@ -30,6 +33,9 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut line_numbers = true;
     let mut lines: Vec<String> = Vec::new();
     let mut graph = false;
+    let mut symbols = false;
+    let mut count = false;
+    let mut stats = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -82,6 +88,9 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 }
             }
             "--graph" => graph = true,
+            "--symbols" | "--s" => symbols = true,
+            "--count" => count = true,
+            "--stats" | "--st" => stats = true,
             "--no-defaults" => no_defaults = true,
             "--regex" => is_regex = true,
             "--help" | "-h" | "-?" => return Ok(CliAction::Help),
@@ -91,11 +100,18 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
         i += 1;
     }
 
+    if count && find.is_none() {
+        return Err("--count requires --f <pattern>".into());
+    }
+
     let mut exclusive_count = 0;
     let mut exclusive_names = Vec::new();
-    if find.is_some() { exclusive_count += 1; exclusive_names.push("--f"); }
+    if find.is_some() && !count { exclusive_count += 1; exclusive_names.push("--f"); }
+    if find.is_some() && count { exclusive_count += 1; exclusive_names.push("--f --count"); }
     if !lines.is_empty() { exclusive_count += 1; exclusive_names.push("--lines"); }
     if graph { exclusive_count += 1; exclusive_names.push("--graph"); }
+    if symbols { exclusive_count += 1; exclusive_names.push("--symbols"); }
+    if stats { exclusive_count += 1; exclusive_names.push("--stats"); }
     if exclusive_count > 1 {
         return Err(format!("{} are mutually exclusive and cannot be combined.", exclusive_names.join(" and ")));
     }
@@ -116,6 +132,9 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
         line_numbers,
         lines,
         graph,
+        symbols,
+        count,
+        stats,
     }))
 }
 
@@ -132,6 +151,8 @@ Modes:
   --f <pattern>           Search file contents for a pattern
   --lines "<specs>"       Extract specific line ranges from files
   --graph                 Show project-internal dependency graph
+  --symbols, --s          Extract symbol declarations from source files
+  --stats, --st           Show codebase statistics (files, lines, bytes by language)
 
 Options:
   --root, -d <path>       Root directory (default: current directory)
@@ -139,6 +160,9 @@ Options:
   --f <pattern>           Search pattern (use | for OR, e.g. Payment|Invoice)
   --lines "<specs>"       Line specs: "file:start:end file2:start:end" (repeatable)
   --graph                 Emit source dependency graph
+  --symbols, --s          Extract fn/struct/class/enum/trait declarations
+  --count                 Show match counts per file (requires --f)
+  --stats, --st           File counts, line counts, byte sizes by extension
   --pad <n>               Context lines before/after each match (default: 0)
   --line-numbers off      Suppress per-line number prefixes in content output
   --timeout <secs>        Max execution time in seconds
@@ -157,6 +181,9 @@ Examples:
   src --lines "src/main.rs:1:20 src/cli.rs:18:40" Pull exact line ranges
   src --graph                                     Show dependency graph
   src --graph --r *.rs                            Rust-only dependency graph
+  src --symbols --r *.rs                          Extract Rust symbol declarations
+  src --r *.ts --f "import" --count               Count import occurrences per file
+  src --stats                                     Codebase statistics overview
   src -d /path/to/project                         Scan a specific directory
 "#);
 }

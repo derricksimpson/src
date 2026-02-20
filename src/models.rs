@@ -5,6 +5,7 @@ pub struct MetaInfo {
     pub timeout: bool,
     pub files_scanned: usize,
     pub files_matched: usize,
+    pub total_matches: Option<usize>,
 }
 
 pub struct FileChunk {
@@ -31,11 +32,59 @@ pub struct GraphEntry {
     pub imports: Vec<String>,
 }
 
+pub struct SymbolEntry {
+    pub kind: String,
+    pub name: String,
+    pub line: usize,
+    pub visibility: Option<String>,
+    pub parent: Option<String>,
+    pub signature: String,
+}
+
+pub struct SymbolFile {
+    pub path: String,
+    pub symbols: Vec<SymbolEntry>,
+    pub error: Option<String>,
+}
+
+pub struct CountEntry {
+    pub path: String,
+    pub count: usize,
+}
+
+pub struct LangStats {
+    pub extension: String,
+    pub files: usize,
+    pub lines: usize,
+    pub bytes: u64,
+}
+
+pub struct LargestFile {
+    pub path: String,
+    pub lines: usize,
+    pub bytes: u64,
+}
+
+pub struct StatsTotals {
+    pub files: usize,
+    pub lines: usize,
+    pub bytes: u64,
+}
+
+pub struct StatsOutput {
+    pub languages: Vec<LangStats>,
+    pub totals: StatsTotals,
+    pub largest: Vec<LargestFile>,
+}
+
 pub struct OutputEnvelope {
     pub meta: Option<MetaInfo>,
     pub files: Option<Vec<FileEntry>>,
     pub tree: Option<ScanResult>,
     pub graph: Option<Vec<GraphEntry>>,
+    pub symbols: Option<Vec<SymbolFile>>,
+    pub counts: Option<Vec<CountEntry>>,
+    pub stats: Option<StatsOutput>,
     pub error: Option<String>,
 }
 
@@ -53,6 +102,9 @@ impl fmt::Display for MetaInfo {
         }
         if self.files_matched != 0 {
             write!(f, "  filesMatched: {}\n", self.files_matched)?;
+        }
+        if let Some(total) = self.total_matches {
+            write!(f, "  totalMatches: {}\n", total)?;
         }
         Ok(())
     }

@@ -58,15 +58,21 @@ fn process_file(
     let mut resolved: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
 
-    for candidate in &raw_imports {
-        let normalized = normalize_candidate(candidate);
-        if normalized == relative {
-            continue;
+        for candidate in &raw_imports {
+            let normalized = normalize_candidate(candidate);
+            if normalized == relative {
+                continue;
+            }
+            if normalized.ends_with('/') {
+                for pf in project_files.iter() {
+                    if pf.starts_with(&normalized) && seen.insert(pf.clone()) {
+                        resolved.push(pf.clone());
+                    }
+                }
+            } else if project_files.contains(&normalized) && seen.insert(normalized.clone()) {
+                resolved.push(normalized);
+            }
         }
-        if project_files.contains(&normalized) && seen.insert(normalized.clone()) {
-            resolved.push(normalized);
-        }
-    }
 
     resolved.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
 

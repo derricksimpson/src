@@ -1,6 +1,9 @@
 use std::io::{self, Write, BufWriter};
 
-use crate::models::{FileChunk, FileEntry, GraphEntry, MetaInfo, OutputEnvelope, ScanResult};
+use crate::models::{
+    CountEntry, FileChunk, FileEntry, GraphEntry, LangStats, LargestFile,
+    MetaInfo, OutputEnvelope, ScanResult, StatsOutput, SymbolEntry, SymbolFile,
+};
 
 pub fn write_output(envelope: &OutputEnvelope) {
     let stdout = io::stdout();
@@ -22,6 +25,15 @@ fn write_envelope(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Result<(
     }
     if let Some(ref graph) = envelope.graph {
         write_graph(w, graph)?;
+    }
+    if let Some(ref symbols) = envelope.symbols {
+        write_symbols(w, symbols)?;
+    }
+    if let Some(ref counts) = envelope.counts {
+        write_counts(w, counts)?;
+    }
+    if let Some(ref stats) = envelope.stats {
+        write_stats(w, stats)?;
     }
     if let Some(ref files) = envelope.files {
         if !files.is_empty() {
@@ -45,6 +57,98 @@ fn write_meta(w: &mut impl Write, meta: &MetaInfo) -> io::Result<()> {
     if meta.files_matched != 0 {
         write!(w, "  filesMatched: {}\n", meta.files_matched)?;
     }
+    if let Some(total) = meta.total_matches {
+        write!(w, "  totalMatches: {}\n", total)?;
+    }
+    Ok(())
+}
+
+fn write_symbols(w: &mut impl Write, symbol_files: &[SymbolFile]) -> io::Result<()> {
+    write!(w, "files:\n")?;
+    for sf in symbol_files {
+        write!(w, "- path: ")?;
+        write_inline_string(w, &sf.path)?;
+        write!(w, "\n")?;
+
+        if let Some(ref error) = sf.error {
+            write!(w, "  error: ")?;
+            write_inline_string(w, error)?;
+            write!(w, "\n")?;
+        }
+
+        if !sf.symbols.is_empty() {
+            write!(w, "  symbols:\n")?;
+            for sym in &sf.symbols {
+                write_symbol_entry(w, sym)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_symbol_entry(w: &mut impl Write, sym: &SymbolEntry) -> io::Result<()> {
+    write!(w, "  - kind: {}\n", sym.kind)?;
+    write!(w, "    name: ")?;
+    write_inline_string(w, &sym.name)?;
+    write!(w, "\n")?;
+    write!(w, "    line: {}\n", sym.line)?;
+    if let Some(ref vis) = sym.visibility {
+        write!(w, "    visibility: {}\n", vis)?;
+    }
+    if let Some(ref parent) = sym.parent {
+        write!(w, "    parent: ")?;
+        write_inline_string(w, parent)?;
+        write!(w, "\n")?;
+    }
+    write!(w, "    signature: ")?;
+    write_inline_string(w, &sym.signature)?;
+    write!(w, "\n")?;
+    Ok(())
+}
+
+fn write_counts(w: &mut impl Write, counts: &[CountEntry]) -> io::Result<()> {
+    write!(w, "files:\n")?;
+    for entry in counts {
+        write!(w, "- path: ")?;
+        write_inline_string(w, &entry.path)?;
+        write!(w, "\n")?;
+        write!(w, "  count: {}\n", entry.count)?;
+    }
+    Ok(())
+}
+
+fn write_stats(w: &mut impl Write, stats: &StatsOutput) -> io::Result<()> {
+    write!(w, "languages:\n")?;
+    for lang in &stats.languages {
+        write_lang_stats_entry(w, lang)?;
+    }
+    write!(w, "totals:\n")?;
+    write!(w, "  files: {}\n", stats.totals.files)?;
+    write!(w, "  lines: {}\n", stats.totals.lines)?;
+    write!(w, "  bytes: {}\n", stats.totals.bytes)?;
+    write!(w, "largest:\n")?;
+    for file in &stats.largest {
+        write_largest_entry(w, file)?;
+    }
+    Ok(())
+}
+
+fn write_lang_stats_entry(w: &mut impl Write, lang: &LangStats) -> io::Result<()> {
+    write!(w, "- extension: ")?;
+    write_inline_string(w, &lang.extension)?;
+    write!(w, "\n")?;
+    write!(w, "  files: {}\n", lang.files)?;
+    write!(w, "  lines: {}\n", lang.lines)?;
+    write!(w, "  bytes: {}\n", lang.bytes)?;
+    Ok(())
+}
+
+fn write_largest_entry(w: &mut impl Write, file: &LargestFile) -> io::Result<()> {
+    write!(w, "- path: ")?;
+    write_inline_string(w, &file.path)?;
+    write!(w, "\n")?;
+    write!(w, "  lines: {}\n", file.lines)?;
+    write!(w, "  bytes: {}\n", file.bytes)?;
     Ok(())
 }
 

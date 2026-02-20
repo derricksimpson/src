@@ -1,5 +1,5 @@
 use std::path::Path;
-use super::LangImports;
+use super::{LangImports, LangSymbols, SymbolInfo};
 
 pub struct RustImports;
 
@@ -45,6 +45,196 @@ impl LangImports for RustImports {
         }
 
         imports
+    }
+}
+
+impl LangSymbols for RustImports {
+    fn extensions(&self) -> &[&str] {
+        &["rs"]
+    }
+
+    fn extract_symbols(&self, content: &str) -> Vec<SymbolInfo> {
+        let mut symbols = Vec::new();
+        let mut current_parent: Option<String> = None;
+        let mut impl_brace_depth: i32 = 0;
+        let mut in_impl = false;
+
+        for (line_idx, line) in content.lines().enumerate() {
+            let trimmed = line.trim();
+            let line_num = line_idx + 1;
+
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                continue;
+            }
+
+            let (vis, rest) = extract_visibility(trimmed);
+
+            if rest.starts_with("impl ") || rest.starts_with("impl<") {
+                let type_name = extract_impl_type(rest);
+                if let Some(name) = type_name {
+                    current_parent = Some(name);
+                    in_impl = true;
+                    impl_brace_depth = 0;
+                    for c in trimmed.chars() {
+                        match c {
+                            '{' => impl_brace_depth += 1,
+                            '}' => impl_brace_depth -= 1,
+                            _ => {}
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            if in_impl {
+                for c in trimmed.chars() {
+                    match c {
+                        '{' => impl_brace_depth += 1,
+                        '}' => impl_brace_depth -= 1,
+                        _ => {}
+                    }
+                }
+                if impl_brace_depth <= 0 {
+                    current_parent = None;
+                    in_impl = false;
+                }
+            }
+
+            if rest.starts_with("fn ") {
+                if let Some(name) = extract_name_before_paren(rest, "fn ") {
+                    let kind = if current_parent.is_some() { "method" } else { "fn" };
+                    symbols.push(SymbolInfo {
+                        kind,
+                        name,
+                        line: line_num,
+                        visibility: vis,
+                        parent: current_parent.clone(),
+                        signature: make_signature(trimmed),
+                    });
+                }
+                continue;
+            }
+
+            if let Some(name) = try_extract_keyword(rest, "struct ") {
+                symbols.push(SymbolInfo {
+                    kind: "struct",
+                    name,
+                    line: line_num,
+                    visibility: vis,
+                    parent: None,
+                    signature: make_signature(trimmed),
+                });
+                continue;
+            }
+
+            if let Some(name) = try_extract_keyword(rest, "enum ") {
+                symbols.push(SymbolInfo {
+                    kind: "enum",
+                    name,
+                    line: line_num,
+                    visibility: vis,
+                    parent: None,
+                    signature: make_signature(trimmed),
+                });
+                continue;
+            }
+
+            if let Some(name) = try_extract_keyword(rest, "trait ") {
+                symbols.push(SymbolInfo {
+                    kind: "trait",
+                    name,
+                    line: line_num,
+                    visibility: vis,
+                    parent: None,
+                    signature: make_signature(trimmed),
+                });
+                continue;
+            }
+
+            if let Some(name) = try_extract_keyword(rest, "type ") {
+                symbols.push(SymbolInfo {
+                    kind: "type",
+                    name,
+                    line: line_num,
+                    visibility: vis,
+                    parent: None,
+                    signature: make_signature(trimmed),
+                });
+                continue;
+            }
+
+            if let Some(name) = try_extract_keyword(rest, "const ") {
+                symbols.push(SymbolInfo {
+                    kind: "const",
+                    name,
+                    line: line_num,
+                    visibility: vis,
+                    parent: current_parent.clone(),
+                    signature: make_signature(trimmed),
+                });
+                continue;
+            }
+
+            if rest.starts_with("mod ") {
+                if let Some(module_name) = parse_mod_decl(&rest[4..]) {
+                    symbols.push(SymbolInfo {
+                        kind: "mod",
+                        name: module_name.to_owned(),
+                        line: line_num,
+                        visibility: vis,
+                        parent: None,
+                        signature: make_signature(trimmed),
+                    });
+                }
+            }
+        }
+
+        symbols
+    }
+}
+
+fn extract_visibility(trimmed: &str) -> (Option<&'static str>, &str) {
+    if let Some(rest) = trimmed.strip_prefix("pub(crate) ") {
+        (Some("pub"), rest)
+    } else if let Some(rest) = trimmed.strip_prefix("pub ") {
+        (Some("pub"), rest)
+    } else {
+        (None, trimmed)
+    }
+}
+
+fn extract_impl_type(rest: &str) -> Option<String> {
+    let after_impl = if let Some(r) = rest.strip_prefix("impl<") {
+        let close = r.find('>')?;
+        r[close + 1..].trim_start()
+    } else {
+        rest.strip_prefix("impl ")?.trim_start()
+    };
+
+    let name_end = after_impl.find(|c: char| !c.is_alphanumeric() && c != '_')?;
+    let name = &after_impl[..name_end];
+    if name.is_empty() { None } else { Some(name.to_owned()) }
+}
+
+fn extract_name_before_paren(rest: &str, prefix: &str) -> Option<String> {
+    let after = rest.strip_prefix(prefix)?;
+    let paren = after.find('(')?;
+    let name = after[..paren].trim();
+    if name.is_empty() { None } else { Some(name.to_owned()) }
+}
+
+fn try_extract_keyword(rest: &str, keyword: &str) -> Option<String> {
+    let after = rest.strip_prefix(keyword)?;
+    let name_end = after.find(|c: char| !c.is_alphanumeric() && c != '_')?;
+    let name = &after[..name_end];
+    if name.is_empty() { None } else { Some(name.to_owned()) }
+}
+
+fn make_signature(trimmed: &str) -> String {
+    if let Some(brace_pos) = trimmed.find('{') {
+        trimmed[..=brace_pos].trim().to_owned()
+    } else {
+        trimmed.to_owned()
     }
 }
 

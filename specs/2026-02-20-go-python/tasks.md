@@ -1,0 +1,110 @@
+# Implementation Plan
+
+- [ ] 1. Implement Go language handler for import extraction (`--graph`)
+  - [ ] 1.1 Create `src/lang/go.rs` with `GoImports` struct and `LangImports` impl
+    - Create the file, add `use std::path::Path;` and `use super::LangImports;`
+    - Define `pub struct GoImports;`
+    - Implement `extensions()` returning `&["go"]`
+    - Stub `extract_imports()` returning empty vec initially
+    - _Requirements: 1.8_
+  - [ ] 1.2 Implement `go.mod` discovery and parsing in `src/lang/go.rs`
+    - Add a `static GO_MODULE_PATH: OnceLock<Option<String>>` for caching the module path across calls
+    - Implement `find_go_mod(file_path: &Path) -> Option<PathBuf>`: walk up from the file's directory looking for `go.mod`
+    - Implement `parse_module_path(go_mod_path: &Path) -> Option<String>`: read the file, find the line starting with `module `, extract the path after it
+    - Wire into a `get_module_path(file_path: &Path) -> Option<&str>` function using `OnceLock::get_or_init`
+    - _Requirements: 1.5_
+  - [ ] 1.3 Implement Go import statement parsing in `src/lang/go.rs`
+    - Implement `parse_imports(content: &str) -> Vec<String>` using a state machine
+    - State `Normal`: detect `import "path"` (single import) → extract quoted path. Detect `import (` → transition to `InBlock`
+    - State `InBlock`: for each line until `)`, strip whitespace and comments. Handle alias imports (`alias "path"`) by extracting the second quoted string. Handle blank imports (`_ "path"`). Extract the quoted path from each valid line
+    - Return all extracted paths as a `Vec<String>`
+    - _Requirements: 1.1, 1.6, 1.7_
+  - [ ] 1.4 Implement Go import resolution in `src/lang/go.rs`
+    - In `extract_imports()`: call `get_module_path`, call `parse_imports`
+    - For each parsed import path: check if it starts with the module path prefix
+    - If yes: strip the module prefix, convert to a relative directory path (e.g., `internal/auth/`)
+    - Return the directory path with a trailing `/` to signal directory-based resolution
+    - If module path is None (no go.mod): return empty vec
+    - _Requirements: 1.2, 1.3, 1.4, 1.5_
+  - [ ] 1.5 Register `GoImports` in `src/lang/mod.rs`
+    - Add `mod go;` at the top
+    - Add `&go::GoImports` to the `HANDLERS` static array
+    - _Requirements: 5.1_
+
+- [ ] 2. Update `graph.rs` to support directory-based import resolution
+  - [ ] 2.1 Add prefix-matching logic in `src/graph.rs::process_file`
+    - In the candidate resolution loop, check if `normalized` ends with `/`
+    - If it does: iterate over `project_files`, collect all files that start with that prefix, add each to `resolved` (with dedup via `seen`)
+    - If it doesn't: use existing exact-match logic (no change)
+    - This is backward-compatible — no existing handler returns paths ending in `/`
+    - _Requirements: 1.4_
+
+- [ ] 3. Implement Python language handler for import extraction (`--graph`)
+  - [ ] 3.1 Create `src/lang/python.rs` with `PythonImports` struct and `LangImports` impl
+    - Create the file, add `use std::path::Path;` and `use super::LangImports;`
+    - Define `pub struct PythonImports;`
+    - Implement `extensions()` returning `&["py"]`
+    - Stub `extract_imports()` returning empty vec initially
+    - _Requirements: 3.8_
+  - [ ] 3.2 Implement Python import statement parsing in `src/lang/python.rs`
+    - Implement `parse_imports(content: &str) -> Vec<ImportStatement>` where `ImportStatement { module: String, is_relative: bool, dot_count: usize }`
+    - Match `import <module>` lines: extract module path (strip ` as alias` if present)
+    - Match `from <module> import <names>` lines: extract module path, determine if relative (starts with `.`)
+    - For relative imports: count leading dots, extract the remaining module path after dots
+    - Skip lines inside string literals (triple-quoted blocks) — basic heuristic: track `"""` / `'''` state
+    - _Requirements: 3.1, 3.7_
+  - [ ] 3.3 Implement Python relative import resolution in `src/lang/python.rs`
+    - For relative imports with `dot_count` and sub-module path:
+    - Start from `file_path.parent()` (the file's directory)
+    - Go up `dot_count - 1` levels (one dot = current package)
+    - Append the sub-module path, replacing `.` with `/`
+    - Generate candidates: `{resolved_path}.py` and `{resolved_path}/__init__.py`
+    - _Requirements: 3.2, 3.9_
+  - [ ] 3.4 Implement Python absolute import resolution in `src/lang/python.rs`
+    - For absolute imports (module path like `myproject.utils.helpers`):
+    - Replace `.` with `/` to get a directory path
+    - Generate candidates: `{path}.py`, `{path}/__init__.py`
+    - Also try progressively shorter paths (e.g., `myproject/utils.py`, `myproject.py`) to handle package-level imports
+    - External packages (`os`, `sys`, `requests`) won't match any project file and get filtered by graph builder
+    - _Requirements: 3.3, 3.4, 3.5, 3.6_
+  - [ ] 3.5 Wire parsing and resolution together in `extract_imports()`
+    - Call `parse_imports(content)` to get all import statements
+    - For each statement: call relative or absolute resolution based on `is_relative`
+    - Collect and return all candidate paths
+    - _Requirements: 3.1_
+  - [ ] 3.6 Register `PythonImports` in `src/lang/mod.rs`
+    - Add `mod python;` at the top
+    - Add `&python::PythonImports` to the `HANDLERS` static array
+    - _Requirements: 5.2_
+
+- [ ] 4. Implement Go symbol extraction (`--symbols`)
+  - [ ] 4.1 Implement `LangSymbols` for `GoImports` in `src/lang/go.rs`
+    - Implement `extensions()` returning `&["go"]`
+    - Implement `extract_symbols(content: &str) -> Vec<SymbolInfo>` scanning line-by-line
+    - Detect `func Name(` → kind=fn. Detect `func (r *Type) Name(` → kind=method, parent=Type (extract type name from receiver, stripping `*` and the variable name)
+    - Detect `type Name struct {` → kind=struct. `type Name interface {` → kind=interface. `type Name = ` or `type Name OtherType` → kind=type
+    - Detect `const Name =` → kind=const. Handle `const (` blocks: scan lines inside parens, extract `Name =` or `Name Type =` patterns
+    - Detect `var Name =` and `var (` blocks similarly → kind=var
+    - Set visibility: if name starts with uppercase → "pub", else → None
+    - Set signature: trimmed line up to `{` or end of line
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7_
+  - [ ] 4.2 Register `GoImports` in `SYMBOL_HANDLERS` in `src/lang/mod.rs`
+    - Add `&go::GoImports` to `SYMBOL_HANDLERS` array (if it exists from the symbols spec)
+    - _Requirements: 5.1_
+
+- [ ] 5. Implement Python symbol extraction (`--symbols`)
+  - [ ] 5.1 Implement `LangSymbols` for `PythonImports` in `src/lang/python.rs`
+    - Implement `extensions()` returning `&["py"]`
+    - Implement `extract_symbols(content: &str) -> Vec<SymbolInfo>` scanning line-by-line
+    - Track current class context: when `class ClassName` is seen at a given indent level, record it. Reset when indentation drops back to that level or lower
+    - Detect `def name(` at indent 0 → kind=fn. At indent > 0 inside a class → kind=method with parent=class name
+    - Detect `async def name(` → same as `def`
+    - Detect `class ClassName` → kind=class
+    - Detect `NAME = ` at indent 0 where NAME is UPPER_SNAKE_CASE → kind=const
+    - Skip decorator lines (`@decorator`) — they're not symbols
+    - Set visibility to None for everything (Python has no enforced access modifiers)
+    - Set signature: trimmed line up to and including the trailing `:`
+    - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8_
+  - [ ] 5.2 Register `PythonImports` in `SYMBOL_HANDLERS` in `src/lang/mod.rs`
+    - Add `&python::PythonImports` to `SYMBOL_HANDLERS` array (if it exists from the symbols spec)
+    - _Requirements: 5.2_

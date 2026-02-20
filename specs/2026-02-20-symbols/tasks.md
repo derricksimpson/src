@@ -1,0 +1,164 @@
+# Implementation Plan
+
+- [ ] 1. Add new data models for symbols, counts, and stats
+  - [ ] 1.1 Add symbol-related structs to `src/models.rs`
+    - Add `SymbolEntry` struct with fields: `kind: String`, `name: String`, `line: usize`, `visibility: Option<String>`, `parent: Option<String>`, `signature: String`
+    - Add `SymbolFile` struct with fields: `path: String`, `symbols: Vec<SymbolEntry>`, `error: Option<String>`
+    - _Requirements: 1.4, 1.5, 1.6_
+  - [ ] 1.2 Add count-related structs to `src/models.rs`
+    - Add `CountEntry` struct with fields: `path: String`, `count: usize`
+    - _Requirements: 2.2_
+  - [ ] 1.3 Add stats-related structs to `src/models.rs`
+    - Add `LangStats` struct with fields: `extension: String`, `files: usize`, `lines: usize`, `bytes: u64`
+    - Add `LargestFile` struct with fields: `path: String`, `lines: usize`, `bytes: u64`
+    - Add `StatsTotals` struct with fields: `files: usize`, `lines: usize`, `bytes: u64`
+    - Add `StatsOutput` struct with fields: `languages: Vec<LangStats>`, `totals: StatsTotals`, `largest: Vec<LargestFile>`
+    - _Requirements: 3.3, 3.4, 3.5_
+  - [ ] 1.4 Extend `OutputEnvelope` in `src/models.rs`
+    - Add `symbols: Option<Vec<SymbolFile>>` field
+    - Add `counts: Option<Vec<CountEntry>>` field
+    - Add `stats: Option<StatsOutput>` field
+    - Add `total_matches: Option<usize>` to `MetaInfo`
+    - Update all existing `OutputEnvelope` construction sites in `main.rs` to include the new `None` fields
+    - _Requirements: 2.3, 1.1, 3.1_
+
+- [ ] 2. Add CLI argument parsing for new flags
+  - [ ] 2.1 Add `--symbols`/`--s`, `--count`, `--stats`/`--st` to `CliArgs` in `src/cli.rs`
+    - Add `symbols: bool`, `count: bool`, `stats: bool` fields to `CliArgs`
+    - Parse `--symbols` and `--s` as boolean flags setting `symbols = true`
+    - Parse `--count` as a boolean flag setting `count = true`
+    - Parse `--stats` and `--st` as boolean flags setting `stats = true`
+    - _Requirements: 1.1, 2.1, 3.1, 4.1_
+  - [ ] 2.2 Update mutual exclusion validation in `src/cli.rs`
+    - Add `symbols`, `stats` to the exclusive count check alongside existing `find`, `lines`, `graph`
+    - Add special validation: if `count` is true but `find` is None, return error `"--count requires --f <pattern>"`
+    - When `count` is true and `find` is present, treat `--f --count` as a single exclusive entry
+    - _Requirements: 1.7, 2.4, 2.5, 3.6, 4.1, 4.2_
+  - [ ] 2.3 Update help text in `src/cli.rs`
+    - Add `--symbols, --s` to the Modes section: `"Extract symbol declarations from source files"`
+    - Add `--count` to Options section: `"Show match counts per file (requires --f)"`
+    - Add `--stats, --st` to Modes section: `"Show codebase statistics (files, lines, bytes by language)"`
+    - Add examples: `src --symbols --r *.rs`, `src --r *.ts --f "import" --count`, `src --stats`
+    - _Requirements: 4.3_
+
+- [ ] 3. Implement the `LangSymbols` trait and Rust symbol extraction
+  - [ ] 3.1 Define `LangSymbols` trait in `src/lang/mod.rs`
+    - Add `SymbolInfo` struct (kind, name, line, visibility, parent, signature) — this is the lang-internal representation before it becomes `SymbolEntry`
+    - Add `pub trait LangSymbols: Sync` with `fn extensions(&self) -> &[&str]` and `fn extract_symbols(&self, content: &str) -> Vec<SymbolInfo>`
+    - Add `static SYMBOL_HANDLERS: &[&dyn LangSymbols]` array (initially empty, populated as handlers are added)
+    - Add `pub fn get_symbol_handler(extension: &str) -> Option<&'static dyn LangSymbols>` following the same pattern as `get_handler`
+    - _Requirements: 1.15_
+  - [ ] 3.2 Implement `LangSymbols` for `RustImports` in `src/lang/rust.rs`
+    - Implement `extract_symbols` scanning line-by-line
+    - Track `impl` blocks: detect `impl TypeName` lines, set `current_parent`, reset on unindented `}`
+    - Detect `pub fn`/`fn` → kind=fn or kind=method (if inside impl), extract name from between `fn ` and `(`
+    - Detect `pub struct`/`struct`, `pub enum`/`enum`, `pub trait`/`trait`, `pub type`/`type`, `pub const`/`const` → extract name as first word after keyword
+    - Detect `mod name;` → kind=mod
+    - Set visibility: "pub" if line starts with `pub ` or `pub(crate) `
+    - Set signature: trimmed line up to and including `{`, or full line if no `{`
+    - Set line: 1-based line number
+    - _Requirements: 1.8_
+  - [ ] 3.3 Implement `LangSymbols` for `TypeScriptImports` in `src/lang/typescript.rs`
+    - Detect `export function`/`function`, `export default function` → kind=fn
+    - Detect `export class`/`class` → kind=class, track brace depth for method detection
+    - Detect `export interface`/`interface` → kind=interface
+    - Detect `export type`/`type` → kind=type
+    - Detect `export enum`/`enum` → kind=enum
+    - Detect `export const`/`const` with `=` → kind=const, check for arrow function pattern `= (` or `= async (` → kind=fn instead
+    - Detect methods inside class bodies: lines matching `name(`, `async name(`, with optional `private`/`public`/`protected` → kind=method, parent=class name
+    - Set visibility: "export" if prefixed with `export`; "public"/"private"/"protected" for class members
+    - _Requirements: 1.9_
+  - [ ] 3.4 Implement `LangSymbols` for `CSharpImports` in `src/lang/csharp.rs`
+    - Detect `class`/`public class`/`internal class` etc. → kind=class, track brace depth
+    - Detect `interface`/`public interface` → kind=interface
+    - Detect `struct`/`public struct` → kind=struct
+    - Detect `enum`/`public enum` → kind=enum
+    - Detect `namespace` → kind=namespace
+    - Detect method declarations inside class bodies: lines with `ReturnType Name(` pattern → kind=method, parent=class name
+    - Detect `const` fields → kind=const
+    - Extract visibility: "public", "private", "protected", "internal"
+    - _Requirements: 1.10_
+  - [ ] 3.5 Register all three handlers in `SYMBOL_HANDLERS` in `src/lang/mod.rs`
+    - Add `&rust::RustImports`, `&typescript::TypeScriptImports`, `&csharp::CSharpImports` to the static array
+    - _Requirements: 1.15_
+
+- [ ] 4. Implement `symbols.rs` orchestrator module
+  - [ ] 4.1 Create `src/symbols.rs` with `extract_symbols` function
+    - Accept `file_paths: &[String]`, `root: &Path`, `cancelled: &AtomicBool`
+    - For each file in parallel (rayon `par_iter`): detect extension, call `get_symbol_handler`, skip if None
+    - Read file content (mmap for files >= 64KB, buffered read otherwise; skip binary via null-byte check in first 8KB — same pattern as `searcher.rs`)
+    - Call `handler.extract_symbols(&content)`, map `SymbolInfo` to `SymbolEntry`
+    - On read error: produce `SymbolFile` with `error` field, empty symbols
+    - Collect into `Vec<SymbolFile>`, sort by path (case-insensitive)
+    - Return results
+    - _Requirements: 1.1, 1.2, 1.3, 1.11, 1.13, 1.14_
+  - [ ] 4.2 Wire `symbols.rs` into `src/main.rs`
+    - Add `mod symbols;` declaration
+    - Add `execute_symbols` function following the pattern of `execute_graph`: call `scanner::find_files`, then `symbols::extract_symbols`, build `OutputEnvelope` with `symbols` field, write output
+    - Add dispatch branch: if `args.symbols` → `execute_symbols(...)`
+    - _Requirements: 1.1, 1.2, 1.3_
+
+- [ ] 5. Implement `count.rs` module
+  - [ ] 5.1 Create `src/count.rs` with `count_matches` function
+    - Accept `file_paths: &[String]`, `root: &Path`, `matcher: &Matcher`, `cancelled: &AtomicBool`
+    - For each file in parallel (rayon): read content (same mmap/buffered strategy), count lines where `matcher.is_match(line)` is true
+    - If count > 0, include `CountEntry { path, count }` in results
+    - Sort results by path (case-insensitive)
+    - Also return total matches (sum of all counts)
+    - _Requirements: 2.1, 2.2, 2.6, 2.9, 2.10, 2.11_
+  - [ ] 5.2 Wire `count.rs` into `src/main.rs`
+    - Add `mod count;` declaration
+    - Add `execute_count` function: build `Matcher` from `args.find`, call `scanner::find_files` for candidates, then `count::count_matches`, build `OutputEnvelope` with `counts` field and `meta.total_matches`, write output
+    - Add dispatch branch: if `args.count && args.find.is_some()` → `execute_count(...)`
+    - _Requirements: 2.1, 2.3, 2.9_
+
+- [ ] 6. Implement `stats.rs` module
+  - [ ] 6.1 Create `src/stats.rs` with `compute_stats` function
+    - Accept `file_paths: &[String]`, `root: &Path`, `cancelled: &AtomicBool`
+    - For each file in parallel (rayon): get metadata (byte size), count lines by counting `\n` bytes (mmap for large files, buffered read for small), extract extension
+    - On read error: skip file entirely
+    - Aggregate by extension: build `HashMap<String, (usize, usize, u64)>` → `Vec<LangStats>`, sorted by lines descending
+    - Compute totals: sum files, lines, bytes
+    - Build largest: collect all `(path, lines, bytes)`, sort by bytes descending, take top 10
+    - Return `StatsResult`
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.7, 3.8, 3.9, 3.10, 3.12_
+  - [ ] 6.2 Wire `stats.rs` into `src/main.rs`
+    - Add `mod stats;` declaration
+    - Add `execute_stats` function: call `scanner::find_files` for candidates, then `stats::compute_stats`, build `OutputEnvelope` with `stats` field, write output
+    - Add dispatch branch: if `args.stats` → `execute_stats(...)`
+    - _Requirements: 3.1, 3.2_
+
+- [ ] 7. Extend YAML output for new modes
+  - [ ] 7.1 Add `write_symbols` to `src/yaml_output.rs`
+    - Import new model types (`SymbolEntry`, `SymbolFile`)
+    - Emit `files:` section with nested `symbols:` per file
+    - Each symbol: emit `kind`, `name`, `line`; conditionally emit `visibility`, `parent`, `signature`
+    - Handle `error` field on `SymbolFile`
+    - _Requirements: 1.4, 1.5, 1.6_
+  - [ ] 7.2 Add `write_counts` to `src/yaml_output.rs`
+    - Import `CountEntry`
+    - Emit `files:` section where each entry has `path` and `count`
+    - _Requirements: 2.2_
+  - [ ] 7.3 Add `write_stats` to `src/yaml_output.rs`
+    - Import stats model types
+    - Emit `languages:` section with extension, files, lines, bytes per entry
+    - Emit `totals:` section with files, lines, bytes
+    - Emit `largest:` section with path, lines, bytes per entry
+    - _Requirements: 3.3, 3.4, 3.5_
+  - [ ] 7.4 Update `write_envelope` to dispatch new sections
+    - Add: if `envelope.symbols.is_some()` → `write_symbols()`
+    - Add: if `envelope.counts.is_some()` → `write_counts()`
+    - Add: if `envelope.stats.is_some()` → `write_stats()`
+    - Add: if `meta.total_matches.is_some()` → emit `totalMatches` in meta
+    - _Requirements: 2.3_
+
+- [ ] 8. Update all existing `OutputEnvelope` construction sites
+  - [ ] 8.1 Update every `OutputEnvelope` literal in `src/main.rs` to include new `None` fields
+    - Add `symbols: None, counts: None, stats: None` to every existing envelope construction in `execute_directory_hierarchy`, `execute_file_listing`, `execute_search`, `execute_lines`, `execute_graph`, and the root error envelope
+    - _Requirements: 1.4 (non-regression)_
+
+- [ ] 9. Update the dispatch order and verify the full pipeline
+  - [ ] 9.1 Reorder the dispatch chain in `src/main.rs::execute()`
+    - Set priority: `lines` > `graph` > `symbols` > `stats` > `count` (with find) > `find` (search) > `globs` (file listing) > default (tree)
+    - Verify all new branches call `yaml_output::write_output` and return correct exit codes (0, 2 for timeout)
+    - _Requirements: 4.4_
