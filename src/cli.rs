@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct CliArgs {
     pub root: String,
     pub globs: Vec<String>,
@@ -15,6 +16,7 @@ pub struct CliArgs {
     pub stats: bool,
 }
 
+#[derive(Debug)]
 pub enum CliAction {
     Run(CliArgs),
     Help,
@@ -184,6 +186,330 @@ Examples:
   src --symbols --r *.rs                          Extract Rust symbol declarations
   src --r *.ts --f "import" --count               Count import occurrences per file
   src --stats                                     Codebase statistics overview
-  src -d /path/to/project                         Scan a specific directory
-"#);
+    src -d /path/to/project                         Scan a specific directory
+    "#);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(input: &[&str]) -> Vec<String> {
+        input.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn no_args_defaults_to_tree_mode() {
+        let result = parse_args(&args(&[]));
+        match result.unwrap() {
+            CliAction::Run(a) => {
+                assert!(a.find.is_none());
+                assert!(a.globs.is_empty());
+                assert!(!a.graph);
+                assert!(!a.symbols);
+                assert!(!a.stats);
+                assert!(!a.count);
+                assert!(a.lines.is_empty());
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn help_flag() {
+        assert!(matches!(parse_args(&args(&["--help"])).unwrap(), CliAction::Help));
+        assert!(matches!(parse_args(&args(&["-h"])).unwrap(), CliAction::Help));
+        assert!(matches!(parse_args(&args(&["-?"])).unwrap(), CliAction::Help));
+    }
+
+    #[test]
+    fn version_flag() {
+        assert!(matches!(parse_args(&args(&["--version"])).unwrap(), CliAction::Version));
+    }
+
+    #[test]
+    fn root_directory() {
+        match parse_args(&args(&["-d", "/tmp"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.root, "/tmp"),
+            _ => panic!("Expected Run"),
+        }
+        match parse_args(&args(&["--root", "/tmp"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.root, "/tmp"),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn glob_patterns() {
+        match parse_args(&args(&["--r", "*.rs"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.globs, vec!["*.rs"]);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn multiple_globs() {
+        match parse_args(&args(&["--r", "*.rs", "--r", "*.ts"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.globs, vec!["*.rs", "*.ts"]);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn search_pattern() {
+        match parse_args(&args(&["--f", "pub fn"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.find, Some("pub fn".to_owned()));
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn pad_option() {
+        match parse_args(&args(&["--f", "test", "--pad", "3"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.pad, 3),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn pad_invalid_returns_error() {
+        let result = parse_args(&args(&["--pad", "abc"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn timeout_option() {
+        match parse_args(&args(&["--timeout", "10"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.timeout, Some(10)),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn timeout_invalid_returns_error() {
+        let result = parse_args(&args(&["--timeout", "xyz"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn exclude_option() {
+        match parse_args(&args(&["--exclude", "vendor"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.excludes, vec!["vendor"]),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn no_defaults_flag() {
+        match parse_args(&args(&["--no-defaults"])).unwrap() {
+            CliAction::Run(a) => assert!(a.no_defaults),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn regex_flag() {
+        match parse_args(&args(&["--f", "test", "--regex"])).unwrap() {
+            CliAction::Run(a) => assert!(a.is_regex),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn line_numbers_off() {
+        match parse_args(&args(&["--line-numbers", "off"])).unwrap() {
+            CliAction::Run(a) => assert!(!a.line_numbers),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn line_numbers_invalid_value() {
+        let result = parse_args(&args(&["--line-numbers", "yes"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn lines_option() {
+        match parse_args(&args(&["--lines", "src/main.rs:1:20 src/cli.rs:10:30"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.lines, vec!["src/main.rs:1:20", "src/cli.rs:10:30"]);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn graph_flag() {
+        match parse_args(&args(&["--graph"])).unwrap() {
+            CliAction::Run(a) => assert!(a.graph),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn symbols_flag() {
+        match parse_args(&args(&["--symbols"])).unwrap() {
+            CliAction::Run(a) => assert!(a.symbols),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn symbols_short_flag() {
+        match parse_args(&args(&["--s"])).unwrap() {
+            CliAction::Run(a) => assert!(a.symbols),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn count_requires_find() {
+        let result = parse_args(&args(&["--count"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--count requires --f"));
+    }
+
+    #[test]
+    fn count_with_find_succeeds() {
+        match parse_args(&args(&["--f", "test", "--count"])).unwrap() {
+            CliAction::Run(a) => {
+                assert!(a.count);
+                assert_eq!(a.find, Some("test".to_owned()));
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn stats_flag() {
+        match parse_args(&args(&["--stats"])).unwrap() {
+            CliAction::Run(a) => assert!(a.stats),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn stats_short_flag() {
+        match parse_args(&args(&["--st"])).unwrap() {
+            CliAction::Run(a) => assert!(a.stats),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn mutual_exclusivity_search_and_graph() {
+        let result = parse_args(&args(&["--f", "test", "--graph"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn mutual_exclusivity_search_and_symbols() {
+        let result = parse_args(&args(&["--f", "test", "--symbols"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn mutual_exclusivity_graph_and_stats() {
+        let result = parse_args(&args(&["--graph", "--stats"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn mutual_exclusivity_lines_and_graph() {
+        let result = parse_args(&args(&["--lines", "f:1:2", "--graph"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unknown_option_error() {
+        let result = parse_args(&args(&["--unknown"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown option"));
+    }
+
+    #[test]
+    fn missing_value_for_root() {
+        let result = parse_args(&args(&["--root"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_r() {
+        let result = parse_args(&args(&["--r"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_f() {
+        let result = parse_args(&args(&["--f"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_pad() {
+        let result = parse_args(&args(&["--pad"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_timeout() {
+        let result = parse_args(&args(&["--timeout"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_exclude() {
+        let result = parse_args(&args(&["--exclude"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_lines() {
+        let result = parse_args(&args(&["--lines"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_line_numbers() {
+        let result = parse_args(&args(&["--line-numbers"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn combined_options() {
+        match parse_args(&args(&["-d", "/tmp", "--r", "*.rs", "--f", "pub fn", "--pad", "2", "--timeout", "30"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.root, "/tmp");
+                assert_eq!(a.globs, vec!["*.rs"]);
+                assert_eq!(a.find, Some("pub fn".to_owned()));
+                assert_eq!(a.pad, 2);
+                assert_eq!(a.timeout, Some(30));
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn default_line_numbers_on() {
+        match parse_args(&args(&[])).unwrap() {
+            CliAction::Run(a) => assert!(a.line_numbers),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn default_pad_zero() {
+        match parse_args(&args(&[])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.pad, 0),
+            _ => panic!("Expected Run"),
+        }
+    }
 }

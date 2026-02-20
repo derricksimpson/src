@@ -64,3 +64,89 @@ pub fn get_symbol_handler(extension: &str) -> Option<&'static dyn LangSymbols> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn get_handler_rust() {
+        assert!(get_handler("rs").is_some());
+    }
+
+    #[test]
+    fn get_handler_typescript() {
+        assert!(get_handler("ts").is_some());
+        assert!(get_handler("tsx").is_some());
+    }
+
+    #[test]
+    fn get_handler_javascript() {
+        assert!(get_handler("js").is_some());
+        assert!(get_handler("jsx").is_some());
+        assert!(get_handler("mjs").is_some());
+        assert!(get_handler("mts").is_some());
+    }
+
+    #[test]
+    fn get_handler_csharp() {
+        assert!(get_handler("cs").is_some());
+    }
+
+    #[test]
+    fn get_handler_go() {
+        assert!(get_handler("go").is_some());
+    }
+
+    #[test]
+    fn get_handler_python() {
+        assert!(get_handler("py").is_some());
+    }
+
+    #[test]
+    fn get_handler_unknown_returns_none() {
+        assert!(get_handler("xyz").is_none());
+        assert!(get_handler("").is_none());
+        assert!(get_handler("java").is_none());
+    }
+
+    #[test]
+    fn get_handler_case_insensitive() {
+        assert!(get_handler("RS").is_some());
+        assert!(get_handler("Ts").is_some());
+        assert!(get_handler("PY").is_some());
+        assert!(get_handler("Go").is_some());
+        assert!(get_handler("CS").is_some());
+    }
+
+    #[test]
+    fn get_symbol_handler_rust() {
+        assert!(get_symbol_handler("rs").is_some());
+    }
+
+    #[test]
+    fn get_symbol_handler_typescript() {
+        assert!(get_symbol_handler("ts").is_some());
+        assert!(get_symbol_handler("tsx").is_some());
+    }
+
+    #[test]
+    fn get_symbol_handler_csharp() {
+        assert!(get_symbol_handler("cs").is_some());
+    }
+
+    #[test]
+    fn get_symbol_handler_go() {
+        assert!(get_symbol_handler("go").is_some());
+    }
+
+    #[test]
+    fn get_symbol_handler_python() {
+        assert!(get_symbol_handler("py").is_some());
+    }
+
+    #[test]
+    fn get_symbol_handler_unknown() {
+        assert!(get_symbol_handler("xyz").is_none());
+    }
+}

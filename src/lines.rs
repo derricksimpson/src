@@ -11,6 +11,7 @@ use crate::models::FileEntry;
 use crate::path_helper;
 use crate::searcher;
 
+#[derive(Debug)]
 pub struct LineSpec {
     pub path: String,
     pub start: usize,
@@ -201,4 +202,100 @@ fn read_file_buffered(path: &Path) -> Result<Option<String>, String> {
 fn is_binary(data: &[u8]) -> bool {
     let check_len = data.len().min(BINARY_CHECK_SIZE);
     data[..check_len].contains(&0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_single_line_spec() {
+        let root = Path::new("/project");
+        let specs = parse_line_specs(&["src/main.rs:1:20".to_owned()], root).unwrap();
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].start, 1);
+        assert_eq!(specs[0].end, 20);
+    }
+
+    #[test]
+    fn parse_line_spec_auto_swaps_reversed() {
+        let root = Path::new("/project");
+        let specs = parse_line_specs(&["src/main.rs:20:1".to_owned()], root).unwrap();
+        assert_eq!(specs[0].start, 1);
+        assert_eq!(specs[0].end, 20);
+    }
+
+    #[test]
+    fn parse_line_spec_invalid_format() {
+        let root = Path::new("/project");
+        let result = parse_line_specs(&["badformat".to_owned()], root);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_line_spec_zero_line_number() {
+        let root = Path::new("/project");
+        let result = parse_line_specs(&["file.rs:0:10".to_owned()], root);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("1-based"));
+    }
+
+    #[test]
+    fn parse_line_spec_non_integer() {
+        let root = Path::new("/project");
+        let result = parse_line_specs(&["file.rs:abc:10".to_owned()], root);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_multiple_specs() {
+        let root = Path::new("/project");
+        let specs = parse_line_specs(
+            &["a.rs:1:5".to_owned(), "b.rs:10:20".to_owned()],
+            root,
+        ).unwrap();
+        assert_eq!(specs.len(), 2);
+    }
+
+    #[test]
+    fn merge_and_sort_overlapping_ranges() {
+        let ranges = vec![(1, 5), (3, 8), (10, 15)];
+        let merged = merge_and_sort_ranges(&ranges, 20);
+        assert_eq!(merged, vec![(1, 8), (10, 15)]);
+    }
+
+    #[test]
+    fn merge_and_sort_adjacent_ranges() {
+        let ranges = vec![(1, 5), (6, 10)];
+        let merged = merge_and_sort_ranges(&ranges, 20);
+        assert_eq!(merged, vec![(1, 10)]);
+    }
+
+    #[test]
+    fn merge_and_sort_clamps_to_line_count() {
+        let ranges = vec![(1, 100)];
+        let merged = merge_and_sort_ranges(&ranges, 10);
+        assert_eq!(merged, vec![(1, 10)]);
+    }
+
+    #[test]
+    fn merge_and_sort_single_range() {
+        let ranges = vec![(5, 10)];
+        let merged = merge_and_sort_ranges(&ranges, 20);
+        assert_eq!(merged, vec![(5, 10)]);
+    }
+
+    #[test]
+    fn merge_and_sort_reversed_range() {
+        let ranges = vec![(10, 5)];
+        let merged = merge_and_sort_ranges(&ranges, 20);
+        assert_eq!(merged, vec![(5, 10)]);
+    }
+
+    #[test]
+    fn parse_line_spec_with_colon_in_path() {
+        let root = Path::new("/project");
+        let specs = parse_line_specs(&["C:\\src\\main.rs:1:20".to_owned()], root);
+        assert!(specs.is_ok());
+    }
 }

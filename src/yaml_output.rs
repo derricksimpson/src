@@ -374,13 +374,341 @@ fn needs_quoting(value: &str) -> bool {
 }
 
 fn write_indent(w: &mut impl Write, n: usize) -> io::Result<()> {
-    const SPACES: &[u8; 32] = b"                                ";
-    if n <= SPACES.len() {
-        w.write_all(&SPACES[..n])
-    } else {
-        for _ in 0..n {
-            w.write_all(b" ")?;
+        const SPACES: &[u8; 32] = b"                                ";
+        if n <= SPACES.len() {
+            w.write_all(&SPACES[..n])
+        } else {
+            for _ in 0..n {
+                w.write_all(b" ")?;
+            }
+            Ok(())
         }
-        Ok(())
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::*;
+
+    fn output_to_string(envelope: &OutputEnvelope) -> String {
+        let mut buf = Vec::new();
+        write_envelope(&mut buf, envelope).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn write_meta_basic() {
+        let envelope = OutputEnvelope {
+            meta: Some(MetaInfo {
+                elapsed_ms: 42,
+                timeout: false,
+                files_scanned: 10,
+                files_matched: 5,
+                total_matches: None,
+            }),
+            files: None, tree: None, graph: None, symbols: None, counts: None, stats: None, error: None,
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("meta:"));
+        assert!(s.contains("elapsedMs: 42"));
+        assert!(s.contains("filesScanned: 10"));
+        assert!(s.contains("filesMatched: 5"));
+    }
+
+    #[test]
+    fn write_meta_with_timeout() {
+        let envelope = OutputEnvelope {
+            meta: Some(MetaInfo {
+                elapsed_ms: 100,
+                timeout: true,
+                files_scanned: 5,
+                files_matched: 0,
+                total_matches: None,
+            }),
+            files: None, tree: None, graph: None, symbols: None, counts: None, stats: None, error: None,
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("timeout: true"));
+    }
+
+    #[test]
+    fn write_error() {
+        let envelope = OutputEnvelope {
+            meta: None,
+            files: None, tree: None, graph: None, symbols: None, counts: None, stats: None,
+            error: Some("Something went wrong".to_owned()),
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("error:"));
+        assert!(s.contains("Something went wrong"));
+    }
+
+    #[test]
+    fn write_files_with_contents() {
+        let envelope = OutputEnvelope {
+            meta: None,
+            files: Some(vec![FileEntry {
+                path: "src/main.rs".to_owned(),
+                contents: Some("fn main() {}".to_owned()),
+                error: None,
+                chunks: None,
+            }]),
+            tree: None, graph: None, symbols: None, counts: None, stats: None, error: None,
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("files:"));
+        assert!(s.contains("path: src/main.rs"));
+        assert!(s.contains("fn main() {}"));
+    }
+
+    #[test]
+    fn write_files_with_chunks() {
+        let envelope = OutputEnvelope {
+            meta: None,
+            files: Some(vec![FileEntry {
+                path: "test.rs".to_owned(),
+                contents: None,
+                error: None,
+                chunks: Some(vec![FileChunk {
+                    start_line: 5,
+                    end_line: 10,
+                    content: "some code\n".to_owned(),
+                }]),
+            }]),
+            tree: None, graph: None, symbols: None, counts: None, stats: None, error: None,
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("startLine: 5"));
+        assert!(s.contains("endLine: 10"));
+        assert!(s.contains("some code"));
+    }
+
+    #[test]
+    fn write_graph_output() {
+        let envelope = OutputEnvelope {
+            meta: None,
+            files: None, tree: None,
+            graph: Some(vec![
+                GraphEntry { file: "a.rs".to_owned(), imports: vec!["b.rs".to_owned()] },
+                GraphEntry { file: "c.rs".to_owned(), imports: vec![] },
+            ]),
+            symbols: None, counts: None, stats: None, error: None,
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("graph:"));
+        assert!(s.contains("file: a.rs"));
+        assert!(s.contains("- b.rs"));
+        assert!(s.contains("imports: []"));
+    }
+
+    #[test]
+    fn write_symbols_output() {
+        let envelope = OutputEnvelope {
+            meta: None,
+            files: None, tree: None, graph: None,
+            symbols: Some(vec![SymbolFile {
+                path: "test.rs".to_owned(),
+                symbols: vec![SymbolEntry {
+                    kind: "fn".to_owned(),
+                    name: "main".to_owned(),
+                    line: 1,
+                    visibility: Some("pub".to_owned()),
+                    parent: None,
+                    signature: "pub fn main() {".to_owned(),
+                }],
+                error: None,
+            }]),
+            counts: None, stats: None, error: None,
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("files:"));
+        assert!(s.contains("path: test.rs"));
+        assert!(s.contains("kind: fn"));
+        assert!(s.contains("name: main"));
+        assert!(s.contains("line: 1"));
+        assert!(s.contains("visibility: pub"));
+    }
+
+    #[test]
+    fn write_counts_output() {
+        let envelope = OutputEnvelope {
+            meta: None,
+            files: None, tree: None, graph: None, symbols: None,
+            counts: Some(vec![
+                CountEntry { path: "a.rs".to_owned(), count: 5 },
+                CountEntry { path: "b.rs".to_owned(), count: 3 },
+            ]),
+            stats: None, error: None,
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("path: a.rs"));
+        assert!(s.contains("count: 5"));
+        assert!(s.contains("path: b.rs"));
+        assert!(s.contains("count: 3"));
+    }
+
+    #[test]
+    fn write_stats_output() {
+        let envelope = OutputEnvelope {
+            meta: None,
+            files: None, tree: None, graph: None, symbols: None, counts: None,
+            stats: Some(StatsOutput {
+                languages: vec![LangStats {
+                    extension: "rs".to_owned(),
+                    files: 10,
+                    lines: 1000,
+                    bytes: 50000,
+                }],
+                totals: StatsTotals { files: 10, lines: 1000, bytes: 50000 },
+                largest: vec![LargestFile { path: "big.rs".to_owned(), lines: 500, bytes: 25000 }],
+            }),
+            error: None,
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("languages:"));
+        assert!(s.contains("extension: rs"));
+        assert!(s.contains("files: 10"));
+        assert!(s.contains("totals:"));
+        assert!(s.contains("largest:"));
+        assert!(s.contains("path: big.rs"));
+    }
+
+    #[test]
+    fn write_tree_output() {
+        let envelope = OutputEnvelope {
+            meta: None,
+            files: None,
+            tree: Some(ScanResult {
+                name: "project".to_owned(),
+                files: Some(vec!["README.md".to_owned()]),
+                children: Some(vec![ScanResult {
+                    name: "src".to_owned(),
+                    files: Some(vec!["main.rs".to_owned()]),
+                    children: None,
+                }]),
+            }),
+            graph: None, symbols: None, counts: None, stats: None, error: None,
+        };
+        let s = output_to_string(&envelope);
+        assert!(s.contains("tree:"));
+        assert!(s.contains("name: project"));
+        assert!(s.contains("README.md"));
+        assert!(s.contains("name: src"));
+        assert!(s.contains("main.rs"));
+    }
+
+    #[test]
+    fn needs_quoting_special_first_chars() {
+        assert!(needs_quoting("-value"));
+        assert!(needs_quoting("[list]"));
+        assert!(needs_quoting("{map}"));
+        assert!(needs_quoting("'quoted'"));
+        assert!(needs_quoting("\"quoted\""));
+        assert!(needs_quoting("!tag"));
+        assert!(needs_quoting("&anchor"));
+        assert!(needs_quoting("*alias"));
+        assert!(needs_quoting("|block"));
+        assert!(needs_quoting(">folded"));
+        assert!(needs_quoting("%directive"));
+        assert!(needs_quoting("@value"));
+        assert!(needs_quoting("`tick"));
+        assert!(needs_quoting(",value"));
+        assert!(needs_quoting("?key"));
+        assert!(needs_quoting("#comment"));
+    }
+
+    #[test]
+    fn needs_quoting_yaml_booleans() {
+        assert!(needs_quoting("true"));
+        assert!(needs_quoting("false"));
+        assert!(needs_quoting("null"));
+        assert!(needs_quoting("True"));
+        assert!(needs_quoting("False"));
+        assert!(needs_quoting("yes"));
+        assert!(needs_quoting("no"));
+        assert!(needs_quoting("on"));
+        assert!(needs_quoting("off"));
+    }
+
+    #[test]
+    fn needs_quoting_colon_and_hash() {
+        assert!(needs_quoting("key: value"));
+        assert!(needs_quoting("value # comment"));
+    }
+
+    #[test]
+    fn needs_quoting_newlines() {
+        assert!(needs_quoting("line1\nline2"));
+        assert!(needs_quoting("line1\rline2"));
+    }
+
+    #[test]
+    fn no_quoting_for_simple_strings() {
+        assert!(!needs_quoting("hello"));
+        assert!(!needs_quoting("main.rs"));
+        assert!(!needs_quoting("src/lang/rust.rs"));
+        assert!(!needs_quoting("pub fn main()"));
+    }
+
+    #[test]
+    fn needs_quoting_empty() {
+        assert!(needs_quoting(""));
+    }
+
+    #[test]
+    fn inline_string_quotes_values_with_colons() {
+        let mut buf = Vec::new();
+        write_inline_string(&mut buf, "key: value").unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.starts_with('"'));
+        assert!(s.ends_with('"'));
+    }
+
+    #[test]
+    fn inline_string_escapes_backslash_and_quotes() {
+        let mut buf = Vec::new();
+        // starts with " which triggers quoting, then contains backslash
+        write_inline_string(&mut buf, "\"hello\\world\"").unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("\\\\"));
+    }
+
+    #[test]
+    fn inline_string_escapes_newlines() {
+        let mut buf = Vec::new();
+        write_inline_string(&mut buf, "line1\nline2").unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("\\n"));
+    }
+
+    #[test]
+    fn inline_string_empty_value() {
+        let mut buf = Vec::new();
+        write_inline_string(&mut buf, "").unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "''");
+    }
+
+    #[test]
+    fn inline_string_plain_value() {
+        let mut buf = Vec::new();
+        write_inline_string(&mut buf, "simple").unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert_eq!(s, "simple");
+    }
+
+    #[test]
+    fn write_indent_small() {
+        let mut buf = Vec::new();
+        write_indent(&mut buf, 4).unwrap();
+        assert_eq!(buf, b"    ");
+    }
+
+    #[test]
+    fn write_indent_large() {
+        let mut buf = Vec::new();
+        write_indent(&mut buf, 40).unwrap();
+        assert_eq!(buf.len(), 40);
+        assert!(buf.iter().all(|&b| b == b' '));
     }
 }

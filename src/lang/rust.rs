@@ -300,3 +300,215 @@ fn normalize(path: std::path::PathBuf) -> String {
         s.into_owned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract_imports(content: &str, file_path: &str) -> Vec<String> {
+        RustImports.extract_imports(content, Path::new(file_path))
+    }
+
+    fn extract_syms(content: &str) -> Vec<SymbolInfo> {
+        <RustImports as LangSymbols>::extract_symbols(&RustImports, content)
+    }
+
+    // ── Import Tests ──
+
+    #[test]
+    fn mod_declaration_generates_import() {
+        let content = "mod cli;";
+        let imports = extract_imports(content, "src/main.rs");
+        assert!(imports.iter().any(|i| i.contains("cli.rs")));
+    }
+
+    #[test]
+    fn mod_declaration_generates_subdir_import() {
+        let content = "mod lang;";
+        let imports = extract_imports(content, "src/main.rs");
+        assert!(imports.iter().any(|i| i.contains("lang/mod.rs")));
+    }
+
+    #[test]
+    fn mod_tests_is_skipped() {
+        let content = "mod tests;";
+        let imports = extract_imports(content, "src/main.rs");
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn use_crate_import() {
+        let content = "use crate::models::FileEntry;";
+        let imports = extract_imports(content, "src/searcher.rs");
+        assert!(imports.iter().any(|i| i.contains("src/models")));
+    }
+
+    #[test]
+    fn use_super_import() {
+        let content = "use super::LangImports;";
+        let imports = extract_imports(content, "src/lang/rust.rs");
+        assert!(!imports.is_empty());
+    }
+
+    #[test]
+    fn no_imports_for_plain_code() {
+        let content = "fn main() { println!(\"hello\"); }";
+        let imports = extract_imports(content, "src/main.rs");
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn multiple_mod_declarations() {
+        let content = "mod cli;\nmod models;\nmod scanner;\n";
+        let imports = extract_imports(content, "src/main.rs");
+        assert!(imports.len() >= 6); // 2 candidates per mod (file + subdir)
+    }
+
+    // ── Symbol Tests ──
+
+    #[test]
+    fn extracts_pub_fn() {
+        let content = "pub fn hello() {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "fn");
+        assert_eq!(syms[0].name, "hello");
+        assert_eq!(syms[0].visibility, Some("pub"));
+        assert_eq!(syms[0].line, 1);
+    }
+
+    #[test]
+    fn extracts_private_fn() {
+        let content = "fn private_fn() {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "fn");
+        assert_eq!(syms[0].visibility, None);
+    }
+
+    #[test]
+    fn extracts_struct() {
+        let content = "pub struct MyStruct {\n    field: i32,\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "struct");
+        assert_eq!(syms[0].name, "MyStruct");
+    }
+
+    #[test]
+    fn extracts_enum() {
+        let content = "pub enum Color {\n    Red,\n    Blue,\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "enum");
+        assert_eq!(syms[0].name, "Color");
+    }
+
+    #[test]
+    fn extracts_trait() {
+        let content = "pub trait Drawable {\n    fn draw(&self);\n}\n";
+        let syms = extract_syms(content);
+        let trait_sym = syms.iter().find(|s| s.kind == "trait").unwrap();
+        assert_eq!(trait_sym.name, "Drawable");
+    }
+
+    #[test]
+    fn extracts_type_alias() {
+        let content = "pub type Result<T> = std::result::Result<T, Error>;\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "type");
+        assert_eq!(syms[0].name, "Result");
+    }
+
+    #[test]
+    fn extracts_const() {
+        let content = "const MAX_SIZE: usize = 1024;\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "const");
+        assert_eq!(syms[0].name, "MAX_SIZE");
+    }
+
+    #[test]
+    fn extracts_mod() {
+        let content = "mod utils;\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "mod");
+        assert_eq!(syms[0].name, "utils");
+    }
+
+    #[test]
+    fn method_inside_impl() {
+        let content = r#"struct Foo;
+impl Foo {
+    pub fn bar(&self) -> i32 {
+        42
+    }
+}
+"#;
+        let syms = extract_syms(content);
+        let struct_sym = syms.iter().find(|s| s.kind == "struct").unwrap();
+        assert_eq!(struct_sym.name, "Foo");
+        let method_sym = syms.iter().find(|s| s.kind == "method").unwrap();
+        assert_eq!(method_sym.name, "bar");
+        assert_eq!(method_sym.parent, Some("Foo".to_owned()));
+    }
+
+    #[test]
+    fn pub_crate_visibility() {
+        let content = "pub(crate) fn internal() {}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].visibility, Some("pub"));
+    }
+
+    #[test]
+    fn skips_comments() {
+        let content = "// pub fn commented_out() {}\nfn real() {}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "real");
+    }
+
+    #[test]
+    fn skips_empty_lines() {
+        let content = "\n\n\nfn spaced() {}\n\n\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "spaced");
+    }
+
+    #[test]
+    fn signature_truncated_at_brace() {
+        let content = "pub fn hello(x: i32) {\n    x + 1\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].signature, "pub fn hello(x: i32) {");
+    }
+
+    #[test]
+    fn impl_with_generics() {
+        let content = r#"impl<T> MyType {
+    fn new() -> Self {
+        Self
+    }
+}
+"#;
+        let syms = extract_syms(content);
+        let method = syms.iter().find(|s| s.kind == "method").unwrap();
+        assert_eq!(method.name, "new");
+        assert_eq!(method.parent, Some("MyType".to_owned()));
+    }
+
+    #[test]
+    fn multiple_items() {
+        let content = r#"pub struct A;
+pub struct B;
+pub fn c() {}
+pub enum D { X }
+pub trait E {}
+"#;
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 5);
+    }
+}

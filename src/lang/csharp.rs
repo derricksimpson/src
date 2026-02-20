@@ -279,3 +279,232 @@ fn namespace_to_path(ns: &str) -> String {
     let path_segments = &segments[1..];
     path_segments.join("/") + "/"
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract_imports(content: &str) -> Vec<String> {
+        CSharpImports.extract_imports(content, Path::new("Foo.cs"))
+    }
+
+    fn extract_syms(content: &str) -> Vec<SymbolInfo> {
+        <CSharpImports as LangSymbols>::extract_symbols(&CSharpImports, content)
+    }
+
+    // ── Import Tests ──
+
+    #[test]
+    fn using_project_namespace() {
+        let content = "using MyApp.Services;\n";
+        let imports = extract_imports(content);
+        assert!(!imports.is_empty());
+        assert!(imports.iter().any(|i| i.contains("Services/")));
+    }
+
+    #[test]
+    fn using_system_ignored() {
+        let content = "using System;\nusing System.Collections.Generic;\n";
+        let imports = extract_imports(content);
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn using_microsoft_ignored() {
+        let content = "using Microsoft.Extensions.DependencyInjection;\n";
+        let imports = extract_imports(content);
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn using_newtonsoft_ignored() {
+        let content = "using Newtonsoft.Json;\n";
+        let imports = extract_imports(content);
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn using_static_ignored() {
+        let content = "using static System.Math;\n";
+        let imports = extract_imports(content);
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn using_alias_ignored() {
+        let content = "using Alias = MyApp.Services.Foo;\n";
+        let imports = extract_imports(content);
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn single_segment_namespace() {
+        let content = "using LocalNamespace;\n";
+        let imports = extract_imports(content);
+        assert!(imports.iter().any(|i| i == "LocalNamespace/"));
+    }
+
+    // ── Symbol Tests ──
+
+    #[test]
+    fn extracts_namespace() {
+        let content = "namespace MyApp.Services\n{\n}\n";
+        let syms = extract_syms(content);
+        let ns = syms.iter().find(|s| s.kind == "namespace").unwrap();
+        assert_eq!(ns.name, "MyApp");
+    }
+
+    #[test]
+    fn extracts_class() {
+        let content = "public class UserService {\n}\n";
+        let syms = extract_syms(content);
+        let cls = syms.iter().find(|s| s.kind == "class").unwrap();
+        assert_eq!(cls.name, "UserService");
+        assert_eq!(cls.visibility, Some("public"));
+    }
+
+    #[test]
+    fn extracts_interface() {
+        let content = "public interface IRepository {\n}\n";
+        let syms = extract_syms(content);
+        let iface = syms.iter().find(|s| s.kind == "interface").unwrap();
+        assert_eq!(iface.name, "IRepository");
+    }
+
+    #[test]
+    fn extracts_struct() {
+        let content = "public struct Point {\n}\n";
+        let syms = extract_syms(content);
+        let st = syms.iter().find(|s| s.kind == "struct").unwrap();
+        assert_eq!(st.name, "Point");
+    }
+
+    #[test]
+    fn extracts_enum() {
+        let content = "public enum Color {\n  Red,\n  Blue,\n}\n";
+        let syms = extract_syms(content);
+        let en = syms.iter().find(|s| s.kind == "enum").unwrap();
+        assert_eq!(en.name, "Color");
+    }
+
+    #[test]
+    fn extracts_method_inside_class() {
+        let content = "public class Foo {\n  public void Bar() {\n  }\n}\n";
+        let syms = extract_syms(content);
+        let method = syms.iter().find(|s| s.kind == "method").unwrap();
+        assert_eq!(method.name, "Bar");
+        assert_eq!(method.parent, Some("Foo".to_owned()));
+    }
+
+    #[test]
+    fn extracts_const() {
+        let content = "public class Foo {\n  public const int MaxSize = 100;\n}\n";
+        let syms = extract_syms(content);
+        let c = syms.iter().find(|s| s.kind == "const").unwrap();
+        assert_eq!(c.name, "MaxSize");
+    }
+
+    #[test]
+    fn private_visibility() {
+        let content = "private class Internal {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].visibility, Some("private"));
+    }
+
+    #[test]
+    fn protected_visibility() {
+        let content = "protected class Base {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].visibility, Some("protected"));
+    }
+
+    #[test]
+    fn internal_visibility() {
+        let content = "internal class Helper {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].visibility, Some("internal"));
+    }
+
+    #[test]
+    fn static_class() {
+        let content = "public static class Utils {\n}\n";
+        let syms = extract_syms(content);
+        let cls = syms.iter().find(|s| s.kind == "class").unwrap();
+        assert_eq!(cls.name, "Utils");
+    }
+
+    #[test]
+    fn abstract_class() {
+        let content = "public abstract class BaseService {\n}\n";
+        let syms = extract_syms(content);
+        let cls = syms.iter().find(|s| s.kind == "class").unwrap();
+        assert_eq!(cls.name, "BaseService");
+    }
+
+    #[test]
+    fn async_method() {
+        let content = "public class Foo {\n  public async Task DoWork() {\n  }\n}\n";
+        let syms = extract_syms(content);
+        let method = syms.iter().find(|s| s.kind == "method").unwrap();
+        assert_eq!(method.name, "DoWork");
+    }
+
+    #[test]
+    fn skips_comments() {
+        let content = "// public class Ignored {}\npublic class Real {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "Real");
+    }
+
+    #[test]
+    fn skips_using_inside_class() {
+        let content = "public class Foo {\n  using var stream = new MemoryStream();\n}\n";
+        let syms = extract_syms(content);
+        let methods: Vec<_> = syms.iter().filter(|s| s.kind == "method").collect();
+        assert!(methods.is_empty());
+    }
+
+    #[test]
+    fn extensions_returns_cs() {
+        let exts = <CSharpImports as LangImports>::extensions(&CSharpImports);
+        assert_eq!(exts, &["cs"]);
+    }
+
+    #[test]
+    fn namespace_to_path_single() {
+        assert_eq!(namespace_to_path("MyApp"), "MyApp/");
+    }
+
+    #[test]
+    fn namespace_to_path_multi() {
+        assert_eq!(namespace_to_path("MyApp.Services.Auth"), "Services/Auth/");
+    }
+
+    #[test]
+    fn is_external_system() {
+        assert!(is_external_namespace("System"));
+        assert!(is_external_namespace("System.Collections.Generic"));
+    }
+
+    #[test]
+    fn is_external_false() {
+        assert!(!is_external_namespace("MyApp"));
+        assert!(!is_external_namespace("MyApp.Services"));
+    }
+
+    #[test]
+    fn extract_using_namespace_valid() {
+        assert_eq!(extract_using_namespace("using MyApp.Services;"), Some("MyApp.Services"));
+    }
+
+    #[test]
+    fn extract_using_namespace_static_returns_none() {
+        assert_eq!(extract_using_namespace("using static System.Math;"), None);
+    }
+
+    #[test]
+    fn extract_using_namespace_alias_returns_none() {
+        assert_eq!(extract_using_namespace("using Alias = Some.Namespace;"), None);
+    }
+}

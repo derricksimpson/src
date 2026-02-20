@@ -104,8 +104,72 @@ impl fmt::Display for MetaInfo {
             write!(f, "  filesMatched: {}\n", self.files_matched)?;
         }
         if let Some(total) = self.total_matches {
-            write!(f, "  totalMatches: {}\n", total)?;
+                write!(f, "  totalMatches: {}\n", total)?;
+            }
+            Ok(())
         }
-        Ok(())
+    }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn meta_info_display_basic() {
+        let meta = MetaInfo {
+            elapsed_ms: 42,
+            timeout: false,
+            files_scanned: 10,
+            files_matched: 5,
+            total_matches: None,
+        };
+        let output = format!("{}", meta);
+        assert!(output.contains("meta:"));
+        assert!(output.contains("elapsedMs: 42"));
+        assert!(output.contains("filesScanned: 10"));
+        assert!(output.contains("filesMatched: 5"));
+        assert!(!output.contains("timeout"));
+        assert!(!output.contains("totalMatches"));
+    }
+
+    #[test]
+    fn meta_info_display_with_timeout() {
+        let meta = MetaInfo {
+            elapsed_ms: 100,
+            timeout: true,
+            files_scanned: 0,
+            files_matched: 0,
+            total_matches: None,
+        };
+        let output = format!("{}", meta);
+        assert!(output.contains("timeout: true"));
+        assert!(!output.contains("filesScanned"));
+        assert!(!output.contains("filesMatched"));
+    }
+
+    #[test]
+    fn meta_info_display_with_total_matches() {
+        let meta = MetaInfo {
+            elapsed_ms: 10,
+            timeout: false,
+            files_scanned: 20,
+            files_matched: 3,
+            total_matches: Some(15),
+        };
+        let output = format!("{}", meta);
+        assert!(output.contains("totalMatches: 15"));
+    }
+
+    #[test]
+    fn meta_info_display_zero_elapsed() {
+        let meta = MetaInfo {
+            elapsed_ms: 0,
+            timeout: false,
+            files_scanned: 1,
+            files_matched: 1,
+            total_matches: None,
+        };
+        let output = format!("{}", meta);
+        assert!(!output.contains("elapsedMs"));
     }
 }

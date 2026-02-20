@@ -342,3 +342,244 @@ fn make_go_signature(trimmed: &str) -> String {
         trimmed.to_owned()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn extract_syms(content: &str) -> Vec<SymbolInfo> {
+        <GoImports as LangSymbols>::extract_symbols(&GoImports, content)
+    }
+
+    // ── Symbol Tests ──
+
+    #[test]
+    fn extracts_simple_func() {
+        let content = "func main() {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "fn");
+        assert_eq!(syms[0].name, "main");
+        assert_eq!(syms[0].visibility, None);
+    }
+
+    #[test]
+    fn extracts_exported_func() {
+        let content = "func HandleRequest(w http.ResponseWriter, r *http.Request) {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "fn");
+        assert_eq!(syms[0].name, "HandleRequest");
+        assert_eq!(syms[0].visibility, Some("pub"));
+    }
+
+    #[test]
+    fn extracts_method_with_receiver() {
+        let content = "func (s *Server) Start() error {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "method");
+        assert_eq!(syms[0].name, "Start");
+        assert_eq!(syms[0].parent, Some("Server".to_owned()));
+    }
+
+    #[test]
+    fn extracts_method_value_receiver() {
+        let content = "func (p Point) Distance() float64 {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "method");
+        assert_eq!(syms[0].parent, Some("Point".to_owned()));
+    }
+
+    #[test]
+    fn extracts_struct_type() {
+        let content = "type Config struct {\n  Port int\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "struct");
+        assert_eq!(syms[0].name, "Config");
+        assert_eq!(syms[0].visibility, Some("pub"));
+    }
+
+    #[test]
+    fn extracts_interface_type() {
+        let content = "type Reader interface {\n  Read(p []byte) (n int, err error)\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "interface");
+        assert_eq!(syms[0].name, "Reader");
+    }
+
+    #[test]
+    fn extracts_type_alias() {
+        let content = "type UserID string\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "type");
+        assert_eq!(syms[0].name, "UserID");
+    }
+
+    #[test]
+    fn extracts_standalone_const() {
+        let content = "const MaxRetries = 3\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "const");
+        assert_eq!(syms[0].name, "MaxRetries");
+        assert_eq!(syms[0].visibility, Some("pub"));
+    }
+
+    #[test]
+    fn extracts_standalone_var() {
+        let content = "var globalConfig Config\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "var");
+        assert_eq!(syms[0].name, "globalConfig");
+        assert_eq!(syms[0].visibility, None);
+    }
+
+    #[test]
+    fn extracts_const_block() {
+        let content = "const (\n  StatusOK = 200\n  StatusNotFound = 404\n)\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 2);
+        assert_eq!(syms[0].kind, "const");
+        assert_eq!(syms[0].name, "StatusOK");
+        assert_eq!(syms[1].name, "StatusNotFound");
+    }
+
+    #[test]
+    fn extracts_var_block() {
+        let content = "var (\n  mu sync.Mutex\n  count int\n)\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 2);
+        assert_eq!(syms[0].kind, "var");
+    }
+
+    #[test]
+    fn go_visibility_exported() {
+        assert_eq!(go_visibility("Handler"), Some("pub"));
+    }
+
+    #[test]
+    fn go_visibility_unexported() {
+        assert_eq!(go_visibility("handler"), None);
+    }
+
+    #[test]
+    fn skips_comments() {
+        let content = "// func ignored() {}\nfunc real() {\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "real");
+    }
+
+    #[test]
+    fn extract_receiver_type_pointer() {
+        assert_eq!(extract_receiver_type("s *Server"), Some("Server".to_owned()));
+    }
+
+    #[test]
+    fn extract_receiver_type_value() {
+        assert_eq!(extract_receiver_type("p Point"), Some("Point".to_owned()));
+    }
+
+    #[test]
+    fn extract_first_ident_basic() {
+        assert_eq!(extract_first_ident("MaxRetries = 3"), Some("MaxRetries"));
+    }
+
+    #[test]
+    fn extract_first_ident_empty() {
+        assert_eq!(extract_first_ident(""), None);
+    }
+
+    #[test]
+    fn make_go_signature_with_brace() {
+        assert_eq!(make_go_signature("func main() {"), "func main() {");
+    }
+
+    #[test]
+    fn make_go_signature_without_brace() {
+        assert_eq!(make_go_signature("type Foo string"), "type Foo string");
+    }
+
+    #[test]
+    fn parse_go_imports_single() {
+        let content = "import \"fmt\"\n";
+        let imports = parse_go_imports(content);
+        assert_eq!(imports, vec!["fmt"]);
+    }
+
+    #[test]
+    fn parse_go_imports_block() {
+        let content = "import (\n  \"fmt\"\n  \"os\"\n)\n";
+        let imports = parse_go_imports(content);
+        assert_eq!(imports, vec!["fmt", "os"]);
+    }
+
+    #[test]
+    fn parse_go_imports_with_alias() {
+        let content = "import (\n  f \"fmt\"\n)\n";
+        let imports = parse_go_imports(content);
+        assert_eq!(imports, vec!["fmt"]);
+    }
+
+    #[test]
+    fn parse_go_imports_skips_comments() {
+        let content = "import (\n  // standard lib\n  \"fmt\"\n)\n";
+        let imports = parse_go_imports(content);
+        assert_eq!(imports, vec!["fmt"]);
+    }
+
+    #[test]
+    fn parse_go_imports_empty_block() {
+        let content = "import (\n)\n";
+        let imports = parse_go_imports(content);
+        assert!(imports.is_empty());
+    }
+
+    #[test]
+    fn extract_quoted_path_basic() {
+        assert_eq!(extract_quoted_path("\"fmt\""), Some("fmt"));
+    }
+
+    #[test]
+    fn extract_quoted_path_with_alias() {
+        assert_eq!(extract_quoted_path("f \"fmt\""), Some("fmt"));
+    }
+
+    #[test]
+    fn extensions_returns_go() {
+        let exts = <GoImports as LangImports>::extensions(&GoImports);
+        assert_eq!(exts, &["go"]);
+    }
+
+    #[test]
+    fn multiple_symbols_comprehensive() {
+        let content = r#"package main
+
+type Server struct {
+    Port int
+}
+
+type Handler interface {
+    Handle()
+}
+
+func NewServer() *Server {
+    return &Server{}
+}
+
+func (s *Server) Start() error {
+    return nil
+}
+
+const MaxConns = 100
+
+var debug bool
+"#;
+        let syms = extract_syms(content);
+        assert!(syms.iter().any(|s| s.kind == "struct" && s.name == "Server"));
+        assert!(syms.iter().any(|s| s.kind == "interface" && s.name == "Handler"));
+        assert!(syms.iter().any(|s| s.kind == "fn" && s.name == "NewServer"));
+        assert!(syms.iter().any(|s| s.kind == "method" && s.name == "Start"));
+        assert!(syms.iter().any(|s| s.kind == "const" && s.name == "MaxConns"));
+        assert!(syms.iter().any(|s| s.kind == "var" && s.name == "debug"));
+    }
+}

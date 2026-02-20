@@ -276,3 +276,166 @@ fn is_binary(data: &[u8]) -> bool {
     let check_len = data.len().min(BINARY_CHECK_SIZE);
     data[..check_len].contains(&0)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn literal_matcher_exact() {
+        let m = Matcher::build("hello", false).unwrap();
+        assert!(m.is_match("hello world"));
+        assert!(!m.is_match("goodbye world"));
+    }
+
+    #[test]
+    fn literal_matcher_case_insensitive() {
+        let m = Matcher::build("Hello", false).unwrap();
+        assert!(m.is_match("HELLO WORLD"));
+        assert!(m.is_match("hello world"));
+        assert!(m.is_match("hElLo world"));
+    }
+
+    #[test]
+    fn multi_term_matcher() {
+        let m = Matcher::build("foo|bar", false).unwrap();
+        assert!(m.is_match("this has foo"));
+        assert!(m.is_match("this has bar"));
+        assert!(!m.is_match("this has baz"));
+    }
+
+    #[test]
+    fn multi_term_case_insensitive() {
+        let m = Matcher::build("FOO|BAR", false).unwrap();
+        assert!(m.is_match("foo here"));
+        assert!(m.is_match("bar here"));
+    }
+
+    #[test]
+    fn regex_matcher() {
+        let m = Matcher::build(r"fn \w+\(", true).unwrap();
+        assert!(m.is_match("fn hello("));
+        assert!(!m.is_match("let x = 5"));
+    }
+
+    #[test]
+    fn regex_invalid_returns_error() {
+        let result = Matcher::build("[invalid", true);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_multi_term_error() {
+        let result = Matcher::build("|", false);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn contains_ci_basic() {
+        assert!(contains_ci("Hello World", "hello"));
+        assert!(contains_ci("Hello World", "WORLD"));
+        assert!(!contains_ci("Hello", "xyz"));
+    }
+
+    #[test]
+    fn contains_ci_needle_longer_than_haystack() {
+        assert!(!contains_ci("ab", "abcdef"));
+    }
+
+    #[test]
+    fn contains_ci_empty() {
+        assert!(contains_ci("anything", ""));
+    }
+
+    #[test]
+    fn merge_ranges_no_overlap() {
+        let indices = vec![0, 10, 20];
+        let result = merge_ranges(&indices, 2, 30);
+        assert_eq!(result, vec![(0, 2), (8, 12), (18, 22)]);
+    }
+
+    #[test]
+    fn merge_ranges_overlap() {
+        let indices = vec![5, 7];
+        let result = merge_ranges(&indices, 3, 30);
+        assert_eq!(result, vec![(2, 10)]);
+    }
+
+    #[test]
+    fn merge_ranges_clamp_start() {
+        let indices = vec![0];
+        let result = merge_ranges(&indices, 5, 10);
+        assert_eq!(result, vec![(0, 5)]);
+    }
+
+    #[test]
+    fn merge_ranges_clamp_end() {
+        let indices = vec![9];
+        let result = merge_ranges(&indices, 5, 10);
+        assert_eq!(result, vec![(4, 9)]);
+    }
+
+    #[test]
+    fn merge_ranges_no_pad() {
+        let indices = vec![3, 7];
+        let result = merge_ranges(&indices, 0, 10);
+        assert_eq!(result, vec![(3, 3), (7, 7)]);
+    }
+
+    #[test]
+    fn build_chunks_with_line_numbers() {
+        let lines = vec!["line0", "line1", "line2", "line3", "line4"];
+        let ranges = vec![(1, 3)];
+        let chunks = build_chunks(&lines, &ranges, true);
+        assert_eq!(chunks.len(), 1);
+        assert_eq!(chunks[0].start_line, 2);
+        assert_eq!(chunks[0].end_line, 4);
+        assert!(chunks[0].content.contains("2.  line1"));
+        assert!(chunks[0].content.contains("3.  line2"));
+        assert!(chunks[0].content.contains("4.  line3"));
+    }
+
+    #[test]
+    fn build_chunks_without_line_numbers() {
+        let lines = vec!["line0", "line1", "line2"];
+        let ranges = vec![(0, 2)];
+        let chunks = build_chunks(&lines, &ranges, false);
+        assert_eq!(chunks.len(), 1);
+        assert!(!chunks[0].content.contains("1."));
+        assert!(chunks[0].content.contains("line0"));
+        assert!(chunks[0].content.contains("line2"));
+    }
+
+    #[test]
+    fn build_chunks_multiple_ranges() {
+        let lines = vec!["a", "b", "c", "d", "e", "f"];
+        let ranges = vec![(0, 1), (4, 5)];
+        let chunks = build_chunks(&lines, &ranges, false);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks[0].content.contains("a"));
+        assert!(chunks[1].content.contains("e"));
+    }
+
+    #[test]
+    fn is_binary_detects_null_bytes() {
+        assert!(is_binary(&[0x48, 0x65, 0x00, 0x6c]));
+    }
+
+    #[test]
+    fn is_binary_clean_text() {
+        assert!(!is_binary(b"Hello, world!"));
+    }
+
+    #[test]
+    fn is_binary_empty() {
+        assert!(!is_binary(&[]));
+    }
+
+    #[test]
+    fn multi_term_trims_whitespace() {
+        let m = Matcher::build("foo | bar | baz", false).unwrap();
+        assert!(m.is_match("contains foo here"));
+        assert!(m.is_match("contains bar here"));
+        assert!(m.is_match("contains baz here"));
+    }
+}
