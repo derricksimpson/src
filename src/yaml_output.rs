@@ -2,17 +2,38 @@ use std::io::{self, Write, BufWriter};
 
 use crate::models::{
     CountEntry, FileChunk, FileEntry, GraphEntry, LangStats, LargestFile,
-    MetaInfo, OutputEnvelope, ScanResult, StatsOutput, SymbolEntry, SymbolFile,
+    MetaInfo, OutputEnvelope, ScanResult, StatsOutput, SymbolFile, SymbolInfo,
 };
 
-pub fn write_output(envelope: &OutputEnvelope) {
+#[derive(Clone, Copy, PartialEq)]
+pub enum OutputFormat {
+    Yaml,
+    Json,
+}
+
+pub fn write_output(envelope: &OutputEnvelope, format: OutputFormat) {
     let stdout = io::stdout();
     let mut w = BufWriter::with_capacity(64 * 1024, stdout.lock());
-    write_envelope(&mut w, envelope).ok();
+    match format {
+        OutputFormat::Yaml => { write_envelope_yaml(&mut w, envelope).ok(); }
+        OutputFormat::Json => { write_envelope_json(&mut w, envelope).ok(); }
+    }
     w.flush().ok();
 }
 
-fn write_envelope(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Result<()> {
+pub fn write_output_to(envelope: &OutputEnvelope, format: OutputFormat, path: &str) -> io::Result<()> {
+    let file = std::fs::File::create(path)?;
+    let mut w = BufWriter::with_capacity(64 * 1024, file);
+    match format {
+        OutputFormat::Yaml => write_envelope_yaml(&mut w, envelope)?,
+        OutputFormat::Json => write_envelope_json(&mut w, envelope)?,
+    }
+    w.flush()
+}
+
+// ── YAML output ──
+
+fn write_envelope_yaml(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Result<()> {
     if let Some(ref meta) = envelope.meta {
         write_meta(w, meta)?;
     }
@@ -64,7 +85,7 @@ fn write_meta(w: &mut impl Write, meta: &MetaInfo) -> io::Result<()> {
 }
 
 fn write_symbols(w: &mut impl Write, symbol_files: &[SymbolFile]) -> io::Result<()> {
-    write!(w, "files:\n")?;
+    write!(w, "symbols:\n")?;
     for sf in symbol_files {
         write!(w, "- path: ")?;
         write_inline_string(w, &sf.path)?;
@@ -76,33 +97,51 @@ fn write_symbols(w: &mut impl Write, symbol_files: &[SymbolFile]) -> io::Result<
             write!(w, "\n")?;
         }
 
-        if !sf.symbols.is_empty() {
-            write!(w, "  symbols:\n")?;
-            for sym in &sf.symbols {
-                write_symbol_entry(w, sym)?;
+        if sf.symbols.is_empty() {
+            continue;
+        }
+
+        let kind_order = &["fn", "method", "class", "struct", "enum", "trait",
+                           "interface", "type", "const", "var", "mod", "namespace", "export"];
+
+        for &kind in kind_order {
+            let group: Vec<&SymbolInfo> = sf.symbols.iter()
+                .filter(|s| s.kind == kind)
+                .collect();
+            if group.is_empty() {
+                continue;
+            }
+
+            let label = match kind {
+                "fn" => "funcs",
+                "method" => "methods",
+                "class" => "classes",
+                "struct" => "structs",
+                "enum" => "enums",
+                "trait" => "traits",
+                "interface" => "interfaces",
+                "type" => "types",
+                "const" => "consts",
+                "var" => "vars",
+                "mod" => "mods",
+                "namespace" => "namespaces",
+                "export" => "exports",
+                _ => kind,
+            };
+
+            write!(w, "  {}:\n", label)?;
+            for sym in &group {
+                write_symbol_compact(w, sym)?;
             }
         }
     }
     Ok(())
 }
 
-fn write_symbol_entry(w: &mut impl Write, sym: &SymbolEntry) -> io::Result<()> {
-    write!(w, "  - kind: {}\n", sym.kind)?;
-    write!(w, "    name: ")?;
-    write_inline_string(w, &sym.name)?;
-    write!(w, "\n")?;
-    write!(w, "    line: {}\n", sym.line)?;
-    if let Some(ref vis) = sym.visibility {
-        write!(w, "    visibility: {}\n", vis)?;
-    }
-    if let Some(ref parent) = sym.parent {
-        write!(w, "    parent: ")?;
-        write_inline_string(w, parent)?;
-        write!(w, "\n")?;
-    }
-    write!(w, "    signature: ")?;
+fn write_symbol_compact(w: &mut impl Write, sym: &SymbolInfo) -> io::Result<()> {
+    write!(w, "  - ")?;
     write_inline_string(w, &sym.signature)?;
-    write!(w, "\n")?;
+    write!(w, " :{}:{}\n", sym.line, sym.end_line)?;
     Ok(())
 }
 
@@ -365,6 +404,10 @@ fn needs_quoting(value: &str) -> bool {
         _ => {}
     }
 
+    if looks_numeric(value) {
+        return true;
+    }
+
     for c in value.chars() {
         if matches!(c, ':' | '#' | '\n' | '\r') {
             return true;
@@ -373,17 +416,247 @@ fn needs_quoting(value: &str) -> bool {
     false
 }
 
-fn write_indent(w: &mut impl Write, n: usize) -> io::Result<()> {
-        const SPACES: &[u8; 32] = b"                                ";
-        if n <= SPACES.len() {
-            w.write_all(&SPACES[..n])
-        } else {
-            for _ in 0..n {
-                w.write_all(b" ")?;
-            }
-            Ok(())
+fn looks_numeric(value: &str) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    let bytes = value.as_bytes();
+    let start = if bytes[0] == b'-' || bytes[0] == b'+' { 1 } else { 0 };
+    if start >= bytes.len() {
+        return false;
+    }
+    let rest = &bytes[start..];
+    if rest.is_empty() {
+        return false;
+    }
+    let mut has_dot = false;
+    for &b in rest {
+        match b {
+            b'0'..=b'9' => {}
+            b'.' if !has_dot => has_dot = true,
+            _ => return false,
         }
     }
+    true
+}
+
+fn write_indent(w: &mut impl Write, n: usize) -> io::Result<()> {
+    const SPACES: &[u8; 32] = b"                                ";
+    if n <= SPACES.len() {
+        w.write_all(&SPACES[..n])
+    } else {
+        for _ in 0..n {
+            w.write_all(b" ")?;
+        }
+        Ok(())
+    }
+}
+
+// ── JSON output ──
+
+fn write_envelope_json(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Result<()> {
+    write!(w, "{{")?;
+    let mut first = true;
+
+    if let Some(ref meta) = envelope.meta {
+        json_comma(w, &mut first)?;
+        write_meta_json(w, meta)?;
+    }
+    if let Some(ref error) = envelope.error {
+        json_comma(w, &mut first)?;
+        write!(w, "\"error\":")?;
+        write_json_string(w, error)?;
+    }
+    if let Some(ref tree) = envelope.tree {
+        json_comma(w, &mut first)?;
+        write!(w, "\"tree\":")?;
+        write_tree_json(w, tree)?;
+    }
+    if let Some(ref graph) = envelope.graph {
+        json_comma(w, &mut first)?;
+        write_graph_json(w, graph)?;
+    }
+    if let Some(ref symbols) = envelope.symbols {
+        json_comma(w, &mut first)?;
+        write_symbols_json(w, symbols)?;
+    }
+    if let Some(ref counts) = envelope.counts {
+        json_comma(w, &mut first)?;
+        write_counts_json(w, counts)?;
+    }
+    if let Some(ref stats) = envelope.stats {
+        json_comma(w, &mut first)?;
+        write_stats_json(w, stats)?;
+    }
+    if let Some(ref files) = envelope.files {
+        if !files.is_empty() {
+            json_comma(w, &mut first)?;
+            write_files_json(w, files)?;
+        }
+    }
+
+    write!(w, "}}\n")
+}
+
+fn json_comma(w: &mut impl Write, first: &mut bool) -> io::Result<()> {
+    if *first { *first = false; } else { write!(w, ",")?; }
+    Ok(())
+}
+
+fn write_json_string(w: &mut impl Write, s: &str) -> io::Result<()> {
+    write!(w, "\"")?;
+    for c in s.chars() {
+        match c {
+            '"' => write!(w, "\\\"")?,
+            '\\' => write!(w, "\\\\")?,
+            '\n' => write!(w, "\\n")?,
+            '\r' => write!(w, "\\r")?,
+            '\t' => write!(w, "\\t")?,
+            c if (c as u32) < 0x20 => write!(w, "\\u{:04x}", c as u32)?,
+            _ => write!(w, "{}", c)?,
+        }
+    }
+    write!(w, "\"")
+}
+
+fn write_meta_json(w: &mut impl Write, meta: &MetaInfo) -> io::Result<()> {
+    write!(w, "\"meta\":{{\"elapsedMs\":{},\"timeout\":{},\"filesScanned\":{},\"filesMatched\":{}",
+        meta.elapsed_ms, meta.timeout, meta.files_scanned, meta.files_matched)?;
+    if let Some(total) = meta.total_matches {
+        write!(w, ",\"totalMatches\":{}", total)?;
+    }
+    write!(w, "}}")
+}
+
+fn write_tree_json(w: &mut impl Write, node: &ScanResult) -> io::Result<()> {
+    write!(w, "{{\"name\":")?;
+    write_json_string(w, &node.name)?;
+    if let Some(ref files) = node.files {
+        write!(w, ",\"files\":[")?;
+        for (i, f) in files.iter().enumerate() {
+            if i > 0 { write!(w, ",")?; }
+            write_json_string(w, f)?;
+        }
+        write!(w, "]")?;
+    }
+    if let Some(ref children) = node.children {
+        write!(w, ",\"children\":[")?;
+        for (i, child) in children.iter().enumerate() {
+            if i > 0 { write!(w, ",")?; }
+            write_tree_json(w, child)?;
+        }
+        write!(w, "]")?;
+    }
+    write!(w, "}}")
+}
+
+fn write_graph_json(w: &mut impl Write, graph: &[GraphEntry]) -> io::Result<()> {
+    write!(w, "\"graph\":[")?;
+    for (i, entry) in graph.iter().enumerate() {
+        if i > 0 { write!(w, ",")?; }
+        write!(w, "{{\"file\":")?;
+        write_json_string(w, &entry.file)?;
+        write!(w, ",\"imports\":[")?;
+        for (j, imp) in entry.imports.iter().enumerate() {
+            if j > 0 { write!(w, ",")?; }
+            write_json_string(w, imp)?;
+        }
+        write!(w, "]}}")?;
+    }
+    write!(w, "]")
+}
+
+fn write_symbols_json(w: &mut impl Write, symbol_files: &[SymbolFile]) -> io::Result<()> {
+    write!(w, "\"symbols\":[")?;
+    for (i, sf) in symbol_files.iter().enumerate() {
+        if i > 0 { write!(w, ",")?; }
+        write!(w, "{{\"path\":")?;
+        write_json_string(w, &sf.path)?;
+        write!(w, ",\"symbols\":[")?;
+        for (j, sym) in sf.symbols.iter().enumerate() {
+            if j > 0 { write!(w, ",")?; }
+            write!(w, "{{\"kind\":")?;
+            write_json_string(w, sym.kind)?;
+            write!(w, ",\"name\":")?;
+            write_json_string(w, &sym.name)?;
+            write!(w, ",\"line\":{},\"endLine\":{}", sym.line, sym.end_line)?;
+            if let Some(vis) = sym.visibility {
+                write!(w, ",\"visibility\":")?;
+                write_json_string(w, vis)?;
+            }
+            if let Some(ref parent) = sym.parent {
+                write!(w, ",\"parent\":")?;
+                write_json_string(w, parent)?;
+            }
+            write!(w, ",\"signature\":")?;
+            write_json_string(w, &sym.signature)?;
+            write!(w, "}}")?;
+        }
+        write!(w, "]}}")?;
+    }
+    write!(w, "]")
+}
+
+fn write_counts_json(w: &mut impl Write, counts: &[CountEntry]) -> io::Result<()> {
+    write!(w, "\"files\":[")?;
+    for (i, entry) in counts.iter().enumerate() {
+        if i > 0 { write!(w, ",")?; }
+        write!(w, "{{\"path\":")?;
+        write_json_string(w, &entry.path)?;
+        write!(w, ",\"count\":{}}}", entry.count)?;
+    }
+    write!(w, "]")
+}
+
+fn write_stats_json(w: &mut impl Write, stats: &StatsOutput) -> io::Result<()> {
+    write!(w, "\"languages\":[")?;
+    for (i, lang) in stats.languages.iter().enumerate() {
+        if i > 0 { write!(w, ",")?; }
+        write!(w, "{{\"extension\":")?;
+        write_json_string(w, &lang.extension)?;
+        write!(w, ",\"files\":{},\"lines\":{},\"bytes\":{}}}", lang.files, lang.lines, lang.bytes)?;
+    }
+    write!(w, "],\"totals\":{{\"files\":{},\"lines\":{},\"bytes\":{}}}",
+        stats.totals.files, stats.totals.lines, stats.totals.bytes)?;
+    write!(w, ",\"largest\":[")?;
+    for (i, file) in stats.largest.iter().enumerate() {
+        if i > 0 { write!(w, ",")?; }
+        write!(w, "{{\"path\":")?;
+        write_json_string(w, &file.path)?;
+        write!(w, ",\"lines\":{},\"bytes\":{}}}", file.lines, file.bytes)?;
+    }
+    write!(w, "]")
+}
+
+fn write_files_json(w: &mut impl Write, files: &[FileEntry]) -> io::Result<()> {
+    write!(w, "\"files\":[")?;
+    for (i, file) in files.iter().enumerate() {
+        if i > 0 { write!(w, ",")?; }
+        write!(w, "{{\"path\":")?;
+        write_json_string(w, &file.path)?;
+        if let Some(ref error) = file.error {
+            write!(w, ",\"error\":")?;
+            write_json_string(w, error)?;
+        }
+        if let Some(ref contents) = file.contents {
+            write!(w, ",\"contents\":")?;
+            write_json_string(w, contents)?;
+        }
+        if let Some(ref chunks) = file.chunks {
+            write!(w, ",\"chunks\":[")?;
+            for (j, chunk) in chunks.iter().enumerate() {
+                if j > 0 { write!(w, ",")?; }
+                write!(w, "{{\"startLine\":{},\"endLine\":{},\"content\":",
+                    chunk.start_line, chunk.end_line)?;
+                write_json_string(w, &chunk.content)?;
+                write!(w, "}}")?;
+            }
+            write!(w, "]")?;
+        }
+        write!(w, "}}")?;
+    }
+    write!(w, "]")
+}
 
 #[cfg(test)]
 mod tests {
@@ -392,7 +665,13 @@ mod tests {
 
     fn output_to_string(envelope: &OutputEnvelope) -> String {
         let mut buf = Vec::new();
-        write_envelope(&mut buf, envelope).unwrap();
+        write_envelope_yaml(&mut buf, envelope).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    fn output_to_json(envelope: &OutputEnvelope) -> String {
+        let mut buf = Vec::new();
+        write_envelope_json(&mut buf, envelope).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
@@ -406,7 +685,7 @@ mod tests {
                 files_matched: 5,
                 total_matches: None,
             }),
-            files: None, tree: None, graph: None, symbols: None, counts: None, stats: None, error: None,
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
         assert!(s.contains("meta:"));
@@ -425,7 +704,7 @@ mod tests {
                 files_matched: 0,
                 total_matches: None,
             }),
-            files: None, tree: None, graph: None, symbols: None, counts: None, stats: None, error: None,
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
         assert!(s.contains("timeout: true"));
@@ -434,9 +713,8 @@ mod tests {
     #[test]
     fn write_error() {
         let envelope = OutputEnvelope {
-            meta: None,
-            files: None, tree: None, graph: None, symbols: None, counts: None, stats: None,
             error: Some("Something went wrong".to_owned()),
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
         assert!(s.contains("error:"));
@@ -446,14 +724,13 @@ mod tests {
     #[test]
     fn write_files_with_contents() {
         let envelope = OutputEnvelope {
-            meta: None,
             files: Some(vec![FileEntry {
                 path: "src/main.rs".to_owned(),
                 contents: Some("fn main() {}".to_owned()),
                 error: None,
                 chunks: None,
             }]),
-            tree: None, graph: None, symbols: None, counts: None, stats: None, error: None,
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
         assert!(s.contains("files:"));
@@ -464,7 +741,6 @@ mod tests {
     #[test]
     fn write_files_with_chunks() {
         let envelope = OutputEnvelope {
-            meta: None,
             files: Some(vec![FileEntry {
                 path: "test.rs".to_owned(),
                 contents: None,
@@ -475,7 +751,7 @@ mod tests {
                     content: "some code\n".to_owned(),
                 }]),
             }]),
-            tree: None, graph: None, symbols: None, counts: None, stats: None, error: None,
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
         assert!(s.contains("startLine: 5"));
@@ -486,13 +762,11 @@ mod tests {
     #[test]
     fn write_graph_output() {
         let envelope = OutputEnvelope {
-            meta: None,
-            files: None, tree: None,
             graph: Some(vec![
                 GraphEntry { file: "a.rs".to_owned(), imports: vec!["b.rs".to_owned()] },
                 GraphEntry { file: "c.rs".to_owned(), imports: vec![] },
             ]),
-            symbols: None, counts: None, stats: None, error: None,
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
         assert!(s.contains("graph:"));
@@ -504,41 +778,37 @@ mod tests {
     #[test]
     fn write_symbols_output() {
         let envelope = OutputEnvelope {
-            meta: None,
-            files: None, tree: None, graph: None,
             symbols: Some(vec![SymbolFile {
                 path: "test.rs".to_owned(),
-                symbols: vec![SymbolEntry {
-                    kind: "fn".to_owned(),
+                symbols: vec![SymbolInfo {
+                    kind: "fn",
                     name: "main".to_owned(),
                     line: 1,
-                    visibility: Some("pub".to_owned()),
+                    end_line: 3,
+                    visibility: Some("pub"),
                     parent: None,
                     signature: "pub fn main() {".to_owned(),
                 }],
                 error: None,
             }]),
-            counts: None, stats: None, error: None,
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
-        assert!(s.contains("files:"));
+        assert!(s.contains("symbols:"));
         assert!(s.contains("path: test.rs"));
-        assert!(s.contains("kind: fn"));
-        assert!(s.contains("name: main"));
-        assert!(s.contains("line: 1"));
-        assert!(s.contains("visibility: pub"));
+        assert!(s.contains("funcs:"));
+        assert!(s.contains("pub fn main() {"));
+        assert!(s.contains(":1:3"));
     }
 
     #[test]
     fn write_counts_output() {
         let envelope = OutputEnvelope {
-            meta: None,
-            files: None, tree: None, graph: None, symbols: None,
             counts: Some(vec![
                 CountEntry { path: "a.rs".to_owned(), count: 5 },
                 CountEntry { path: "b.rs".to_owned(), count: 3 },
             ]),
-            stats: None, error: None,
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
         assert!(s.contains("path: a.rs"));
@@ -550,8 +820,6 @@ mod tests {
     #[test]
     fn write_stats_output() {
         let envelope = OutputEnvelope {
-            meta: None,
-            files: None, tree: None, graph: None, symbols: None, counts: None,
             stats: Some(StatsOutput {
                 languages: vec![LangStats {
                     extension: "rs".to_owned(),
@@ -562,7 +830,7 @@ mod tests {
                 totals: StatsTotals { files: 10, lines: 1000, bytes: 50000 },
                 largest: vec![LargestFile { path: "big.rs".to_owned(), lines: 500, bytes: 25000 }],
             }),
-            error: None,
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
         assert!(s.contains("languages:"));
@@ -576,8 +844,6 @@ mod tests {
     #[test]
     fn write_tree_output() {
         let envelope = OutputEnvelope {
-            meta: None,
-            files: None,
             tree: Some(ScanResult {
                 name: "project".to_owned(),
                 files: Some(vec!["README.md".to_owned()]),
@@ -587,7 +853,7 @@ mod tests {
                     children: None,
                 }]),
             }),
-            graph: None, symbols: None, counts: None, stats: None, error: None,
+            ..Default::default()
         };
         let s = output_to_string(&envelope);
         assert!(s.contains("tree:"));
@@ -656,6 +922,17 @@ mod tests {
     }
 
     #[test]
+    fn needs_quoting_numeric_strings() {
+        assert!(needs_quoting("123"));
+        assert!(needs_quoting("3.14"));
+        assert!(needs_quoting("0"));
+        assert!(needs_quoting("-42"));
+        assert!(needs_quoting("+7"));
+        assert!(!needs_quoting("12abc"));
+        assert!(!needs_quoting("v1.0"));
+    }
+
+    #[test]
     fn inline_string_quotes_values_with_colons() {
         let mut buf = Vec::new();
         write_inline_string(&mut buf, "key: value").unwrap();
@@ -667,7 +944,6 @@ mod tests {
     #[test]
     fn inline_string_escapes_backslash_and_quotes() {
         let mut buf = Vec::new();
-        // starts with " which triggers quoting, then contains backslash
         write_inline_string(&mut buf, "\"hello\\world\"").unwrap();
         let s = String::from_utf8(buf).unwrap();
         assert!(s.contains("\\\\"));
@@ -710,5 +986,95 @@ mod tests {
         write_indent(&mut buf, 40).unwrap();
         assert_eq!(buf.len(), 40);
         assert!(buf.iter().all(|&b| b == b' '));
+    }
+
+    // ── JSON output tests ──
+
+    #[test]
+    fn json_meta_basic() {
+        let envelope = OutputEnvelope {
+            meta: Some(MetaInfo {
+                elapsed_ms: 42,
+                timeout: false,
+                files_scanned: 10,
+                files_matched: 5,
+                total_matches: None,
+            }),
+            ..Default::default()
+        };
+        let s = output_to_json(&envelope);
+        assert!(s.contains("\"meta\""));
+        assert!(s.contains("\"elapsedMs\":42"));
+        assert!(s.contains("\"filesScanned\":10"));
+        assert!(s.starts_with('{'));
+        assert!(s.trim().ends_with('}'));
+    }
+
+    #[test]
+    fn json_error() {
+        let envelope = OutputEnvelope {
+            error: Some("Something went wrong".to_owned()),
+            ..Default::default()
+        };
+        let s = output_to_json(&envelope);
+        assert!(s.contains("\"error\":\"Something went wrong\""));
+    }
+
+    #[test]
+    fn json_graph() {
+        let envelope = OutputEnvelope {
+            graph: Some(vec![
+                GraphEntry { file: "a.rs".to_owned(), imports: vec!["b.rs".to_owned()] },
+            ]),
+            ..Default::default()
+        };
+        let s = output_to_json(&envelope);
+        assert!(s.contains("\"graph\":["));
+        assert!(s.contains("\"file\":\"a.rs\""));
+        assert!(s.contains("\"imports\":[\"b.rs\"]"));
+    }
+
+    #[test]
+    fn json_escapes_special_chars() {
+        let mut buf = Vec::new();
+        write_json_string(&mut buf, "hello \"world\"\nnew\\line").unwrap();
+        let s = String::from_utf8(buf).unwrap();
+        assert!(s.contains("\\\""));
+        assert!(s.contains("\\n"));
+        assert!(s.contains("\\\\"));
+    }
+
+    #[test]
+    fn json_counts() {
+        let envelope = OutputEnvelope {
+            counts: Some(vec![CountEntry { path: "a.rs".to_owned(), count: 5 }]),
+            ..Default::default()
+        };
+        let s = output_to_json(&envelope);
+        assert!(s.contains("\"count\":5"));
+    }
+
+    #[test]
+    fn json_symbols() {
+        let envelope = OutputEnvelope {
+            symbols: Some(vec![SymbolFile {
+                path: "test.rs".to_owned(),
+                symbols: vec![SymbolInfo {
+                    kind: "fn",
+                    name: "main".to_owned(),
+                    line: 1,
+                    end_line: 3,
+                    visibility: Some("pub"),
+                    parent: None,
+                    signature: "pub fn main() {".to_owned(),
+                }],
+                error: None,
+            }]),
+            ..Default::default()
+        };
+        let s = output_to_json(&envelope);
+        assert!(s.contains("\"symbols\":["));
+        assert!(s.contains("\"kind\":\"fn\""));
+        assert!(s.contains("\"visibility\":\"pub\""));
     }
 }

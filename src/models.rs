@@ -1,5 +1,7 @@
 use std::fmt;
 
+pub use crate::lang::SymbolInfo;
+
 pub struct MetaInfo {
     pub elapsed_ms: u128,
     pub timeout: bool,
@@ -32,18 +34,9 @@ pub struct GraphEntry {
     pub imports: Vec<String>,
 }
 
-pub struct SymbolEntry {
-    pub kind: String,
-    pub name: String,
-    pub line: usize,
-    pub visibility: Option<String>,
-    pub parent: Option<String>,
-    pub signature: String,
-}
-
 pub struct SymbolFile {
     pub path: String,
-    pub symbols: Vec<SymbolEntry>,
+    pub symbols: Vec<SymbolInfo>,
     pub error: Option<String>,
 }
 
@@ -77,6 +70,7 @@ pub struct StatsOutput {
     pub largest: Vec<LargestFile>,
 }
 
+#[derive(Default)]
 pub struct OutputEnvelope {
     pub meta: Option<MetaInfo>,
     pub files: Option<Vec<FileEntry>>,
@@ -104,11 +98,11 @@ impl fmt::Display for MetaInfo {
             write!(f, "  filesMatched: {}\n", self.files_matched)?;
         }
         if let Some(total) = self.total_matches {
-                write!(f, "  totalMatches: {}\n", total)?;
-            }
-            Ok(())
+            write!(f, "  totalMatches: {}\n", total)?;
         }
+        Ok(())
     }
+}
 
 #[cfg(test)]
 mod tests {

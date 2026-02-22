@@ -1,6 +1,7 @@
 mod cli;
 mod count;
 mod exclusion;
+mod file_reader;
 mod glob;
 mod graph;
 mod lang;
@@ -20,6 +21,7 @@ use std::time::Instant;
 
 use models::{FileEntry, MetaInfo, OutputEnvelope};
 use searcher::Matcher;
+use yaml_output::OutputFormat;
 
 fn main() {
     let exit_code = run();
@@ -50,20 +52,54 @@ fn run() -> i32 {
     }
 }
 
+fn resolve_format(args: &cli::CliArgs) -> OutputFormat {
+    match args.format {
+        cli::OutputFormatArg::Json => OutputFormat::Json,
+        cli::OutputFormatArg::Yaml => OutputFormat::Yaml,
+    }
+}
+
+fn emit(envelope: &OutputEnvelope, format: OutputFormat, output_path: &Option<String>) {
+    if let Some(ref path) = output_path {
+        if let Err(e) = yaml_output::write_output_to(envelope, format, path) {
+            eprintln!("Failed to write output to {}: {}", path, e);
+        }
+    } else {
+        yaml_output::write_output(envelope, format);
+    }
+}
+
+fn make_meta(elapsed: u128, timed_out: bool, scanned: usize, matched: usize, total: Option<usize>) -> MetaInfo {
+    MetaInfo {
+        elapsed_ms: elapsed,
+        timeout: timed_out,
+        files_scanned: scanned,
+        files_matched: matched,
+        total_matches: total,
+    }
+}
+
+fn timeout_error(timed_out: bool) -> Option<String> {
+    if timed_out { Some("Operation timed out".into()) } else { None }
+}
+
+fn apply_limit<T>(items: Vec<T>, limit: Option<usize>) -> Vec<T> {
+    match limit {
+        Some(n) if n < items.len() => items.into_iter().take(n).collect(),
+        _ => items,
+    }
+}
+
 fn execute(args: cli::CliArgs) -> i32 {
     let root = Path::new(&args.root);
+    let format = resolve_format(&args);
+
     if !root.is_dir() {
         let envelope = OutputEnvelope {
-            meta: None,
-            files: None,
-            tree: None,
-            graph: None,
-            symbols: None,
-            counts: None,
-            stats: None,
             error: Some(format!("Directory not found: {}", args.root)),
+            ..Default::default()
         };
-        yaml_output::write_output(&envelope);
+        emit(&envelope, format, &args.output);
         return 1;
     }
 
@@ -86,52 +122,44 @@ fn execute(args: cli::CliArgs) -> i32 {
     let start = Instant::now();
 
     if !args.lines.is_empty() {
-        execute_lines(&args, root, &cancelled, start)
+        execute_lines(&args, root, &cancelled, start, format)
     } else if args.graph {
-        execute_graph(&args, root, &filter, &cancelled, start)
+        execute_graph(&args, root, &filter, &cancelled, start, format)
     } else if args.symbols {
-        execute_symbols(&args, root, &filter, &cancelled, start)
+        execute_symbols(&args, root, &filter, &cancelled, start, format)
     } else if args.stats {
-        execute_stats(&args, root, &filter, &cancelled, start)
+        execute_stats(&args, root, &filter, &cancelled, start, format)
     } else if args.count && args.find.is_some() {
-        execute_count(&args, root, &filter, &cancelled, start)
+        execute_count(&args, root, &filter, &cancelled, start, format)
     } else if let Some(ref find_pattern) = args.find {
-        execute_search(&args, root, find_pattern, &filter, &cancelled, start)
+        execute_search(&args, root, find_pattern, &filter, &cancelled, start, format)
     } else if !args.globs.is_empty() {
-        execute_file_listing(&args, root, &filter, &cancelled, start)
+        execute_file_listing(&args, root, &filter, &cancelled, start, format)
     } else {
-        execute_directory_hierarchy(root, &filter, &cancelled, start)
+        execute_directory_hierarchy(&args, root, &filter, &cancelled, start, format)
     }
 }
 
 fn execute_directory_hierarchy(
+    args: &cli::CliArgs,
     root: &Path,
     filter: &exclusion::ExclusionFilter,
     cancelled: &AtomicBool,
     start: Instant,
+    format: OutputFormat,
 ) -> i32 {
     let tree = scanner::scan_directories(root, filter, cancelled);
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
     let envelope = OutputEnvelope {
-        meta: Some(MetaInfo {
-            elapsed_ms: elapsed,
-            timeout: timed_out,
-            files_scanned: 0,
-            files_matched: 0,
-            total_matches: None,
-        }),
-        files: None,
+        meta: Some(make_meta(elapsed, timed_out, 0, 0, None)),
         tree: Some(tree),
-        graph: None,
-        symbols: None,
-        counts: None,
-        stats: None,
-        error: if timed_out { Some("Operation timed out".into()) } else { None },
+        error: timeout_error(timed_out),
+        ..Default::default()
     };
 
-    yaml_output::write_output(&envelope);
+    emit(&envelope, format, &args.output);
     if timed_out { 2 } else { 0 }
 }
 
@@ -141,6 +169,7 @@ fn execute_file_listing(
     filter: &exclusion::ExclusionFilter,
     cancelled: &AtomicBool,
     start: Instant,
+    format: OutputFormat,
 ) -> i32 {
     let files = scanner::find_files(root, &args.globs, filter, cancelled);
     let elapsed = start.elapsed().as_millis();
@@ -156,25 +185,18 @@ fn execute_file_listing(
         })
         .collect();
 
-    let count = entries.len();
+    let total = entries.len();
+    let entries = apply_limit(entries, args.limit);
+    let matched = entries.len();
+
     let envelope = OutputEnvelope {
-        meta: Some(MetaInfo {
-            elapsed_ms: elapsed,
-            timeout: timed_out,
-            files_scanned: count,
-            files_matched: count,
-            total_matches: None,
-        }),
+        meta: Some(make_meta(elapsed, timed_out, total, matched, None)),
         files: Some(entries),
-        tree: None,
-        graph: None,
-        symbols: None,
-        counts: None,
-        stats: None,
-        error: if timed_out { Some("Operation timed out".into()) } else { None },
+        error: timeout_error(timed_out),
+        ..Default::default()
     };
 
-    yaml_output::write_output(&envelope);
+    emit(&envelope, format, &args.output);
     if timed_out { 2 } else { 0 }
 }
 
@@ -185,21 +207,16 @@ fn execute_search(
     filter: &exclusion::ExclusionFilter,
     cancelled: &AtomicBool,
     start: Instant,
+    format: OutputFormat,
 ) -> i32 {
     let matcher = match Matcher::build(pattern, args.is_regex) {
         Ok(m) => m,
         Err(e) => {
             let envelope = OutputEnvelope {
-                meta: None,
-                files: None,
-                tree: None,
-                graph: None,
-                symbols: None,
-                counts: None,
-                stats: None,
                 error: Some(e),
+                ..Default::default()
             };
-            yaml_output::write_output(&envelope);
+            emit(&envelope, format, &args.output);
             return 1;
         }
     };
@@ -211,51 +228,34 @@ fn execute_search(
     };
 
     let candidate_files = scanner::find_files(root, &globs, filter, cancelled);
+    let scanned = candidate_files.len();
 
     if cancelled.load(Ordering::Relaxed) {
         let elapsed = start.elapsed().as_millis();
         let envelope = OutputEnvelope {
-            meta: Some(MetaInfo {
-                elapsed_ms: elapsed,
-                timeout: true,
-                files_scanned: candidate_files.len(),
-                files_matched: 0,
-                total_matches: None,
-            }),
-            files: None,
-            tree: None,
-            graph: None,
-            symbols: None,
-            counts: None,
-            stats: None,
+            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
             error: Some("Operation timed out — partial results may be incomplete".into()),
+            ..Default::default()
         };
-        yaml_output::write_output(&envelope);
+        emit(&envelope, format, &args.output);
         return 2;
     }
 
-    let entries = searcher::search_files(&candidate_files, root, &matcher, args.pad, args.line_numbers, cancelled);
+    let entries = searcher::search_files(&candidate_files, root, &matcher, args.line_numbers, cancelled);
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
+    let entries = apply_limit(entries, args.limit);
+    let matched = entries.len();
+
     let envelope = OutputEnvelope {
-        meta: Some(MetaInfo {
-            elapsed_ms: elapsed,
-            timeout: timed_out,
-            files_scanned: candidate_files.len(),
-            files_matched: entries.len(),
-            total_matches: None,
-        }),
+        meta: Some(make_meta(elapsed, timed_out, scanned, matched, None)),
         files: Some(entries),
-        tree: None,
-        graph: None,
-        symbols: None,
-        counts: None,
-        stats: None,
         error: if timed_out { Some("Operation timed out — partial results may be incomplete".into()) } else { None },
+        ..Default::default()
     };
 
-    yaml_output::write_output(&envelope);
+    emit(&envelope, format, &args.output);
     if timed_out { 2 } else { 0 }
 }
 
@@ -264,21 +264,16 @@ fn execute_lines(
     root: &Path,
     cancelled: &AtomicBool,
     start: Instant,
+    format: OutputFormat,
 ) -> i32 {
     let specs = match lines::parse_line_specs(&args.lines, root) {
         Ok(s) => s,
         Err(e) => {
             let envelope = OutputEnvelope {
-                meta: None,
-                files: None,
-                tree: None,
-                graph: None,
-                symbols: None,
-                counts: None,
-                stats: None,
                 error: Some(e),
+                ..Default::default()
             };
-            yaml_output::write_output(&envelope);
+            emit(&envelope, format, &args.output);
             return 1;
         }
     };
@@ -287,24 +282,17 @@ fn execute_lines(
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
+    let entries = apply_limit(entries, args.limit);
+    let matched = entries.len();
+
     let envelope = OutputEnvelope {
-        meta: Some(MetaInfo {
-            elapsed_ms: elapsed,
-            timeout: timed_out,
-            files_scanned: 0,
-            files_matched: entries.len(),
-            total_matches: None,
-        }),
+        meta: Some(make_meta(elapsed, timed_out, 0, matched, None)),
         files: Some(entries),
-        tree: None,
-        graph: None,
-        symbols: None,
-        counts: None,
-        stats: None,
-        error: if timed_out { Some("Operation timed out".into()) } else { None },
+        error: timeout_error(timed_out),
+        ..Default::default()
     };
 
-    yaml_output::write_output(&envelope);
+    emit(&envelope, format, &args.output);
     if timed_out { 2 } else { 0 }
 }
 
@@ -314,6 +302,7 @@ fn execute_graph(
     filter: &exclusion::ExclusionFilter,
     cancelled: &AtomicBool,
     start: Instant,
+    format: OutputFormat,
 ) -> i32 {
     let files = if args.globs.is_empty() {
         scanner::find_files(root, &["*.*".to_owned()], filter, cancelled)
@@ -321,25 +310,15 @@ fn execute_graph(
         scanner::find_files(root, &args.globs, filter, cancelled)
     };
 
+    let scanned = files.len();
     if cancelled.load(Ordering::Relaxed) {
         let elapsed = start.elapsed().as_millis();
         let envelope = OutputEnvelope {
-            meta: Some(MetaInfo {
-                elapsed_ms: elapsed,
-                timeout: true,
-                files_scanned: files.len(),
-                files_matched: 0,
-                total_matches: None,
-            }),
-            files: None,
-            tree: None,
-            graph: None,
-            symbols: None,
-            counts: None,
-            stats: None,
+            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
             error: Some("Operation timed out".into()),
+            ..Default::default()
         };
-        yaml_output::write_output(&envelope);
+        emit(&envelope, format, &args.output);
         return 2;
     }
 
@@ -347,24 +326,17 @@ fn execute_graph(
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
+    let graph_entries = apply_limit(graph_entries, args.limit);
+    let matched = graph_entries.len();
+
     let envelope = OutputEnvelope {
-        meta: Some(MetaInfo {
-            elapsed_ms: elapsed,
-            timeout: timed_out,
-            files_scanned: files.len(),
-            files_matched: graph_entries.len(),
-            total_matches: None,
-        }),
-        files: None,
-        tree: None,
+        meta: Some(make_meta(elapsed, timed_out, scanned, matched, None)),
         graph: Some(graph_entries),
-        symbols: None,
-        counts: None,
-        stats: None,
-        error: if timed_out { Some("Operation timed out".into()) } else { None },
+        error: timeout_error(timed_out),
+        ..Default::default()
     };
 
-    yaml_output::write_output(&envelope);
+    emit(&envelope, format, &args.output);
     if timed_out { 2 } else { 0 }
 }
 
@@ -374,6 +346,7 @@ fn execute_symbols(
     filter: &exclusion::ExclusionFilter,
     cancelled: &AtomicBool,
     start: Instant,
+    format: OutputFormat,
 ) -> i32 {
     let files = if args.globs.is_empty() {
         scanner::find_files(root, &["*.*".to_owned()], filter, cancelled)
@@ -381,25 +354,15 @@ fn execute_symbols(
         scanner::find_files(root, &args.globs, filter, cancelled)
     };
 
+    let scanned = files.len();
     if cancelled.load(Ordering::Relaxed) {
         let elapsed = start.elapsed().as_millis();
         let envelope = OutputEnvelope {
-            meta: Some(MetaInfo {
-                elapsed_ms: elapsed,
-                timeout: true,
-                files_scanned: files.len(),
-                files_matched: 0,
-                total_matches: None,
-            }),
-            files: None,
-            tree: None,
-            graph: None,
-            symbols: None,
-            counts: None,
-            stats: None,
+            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
             error: Some("Operation timed out".into()),
+            ..Default::default()
         };
-        yaml_output::write_output(&envelope);
+        emit(&envelope, format, &args.output);
         return 2;
     }
 
@@ -407,24 +370,17 @@ fn execute_symbols(
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
+    let symbol_files = apply_limit(symbol_files, args.limit);
+    let matched = symbol_files.len();
+
     let envelope = OutputEnvelope {
-        meta: Some(MetaInfo {
-            elapsed_ms: elapsed,
-            timeout: timed_out,
-            files_scanned: files.len(),
-            files_matched: symbol_files.len(),
-            total_matches: None,
-        }),
-        files: None,
-        tree: None,
-        graph: None,
+        meta: Some(make_meta(elapsed, timed_out, scanned, matched, None)),
         symbols: Some(symbol_files),
-        counts: None,
-        stats: None,
-        error: if timed_out { Some("Operation timed out".into()) } else { None },
+        error: timeout_error(timed_out),
+        ..Default::default()
     };
 
-    yaml_output::write_output(&envelope);
+    emit(&envelope, format, &args.output);
     if timed_out { 2 } else { 0 }
 }
 
@@ -434,6 +390,7 @@ fn execute_stats(
     filter: &exclusion::ExclusionFilter,
     cancelled: &AtomicBool,
     start: Instant,
+    format: OutputFormat,
 ) -> i32 {
     let files = if args.globs.is_empty() {
         scanner::find_files(root, &["*.*".to_owned()], filter, cancelled)
@@ -441,25 +398,15 @@ fn execute_stats(
         scanner::find_files(root, &args.globs, filter, cancelled)
     };
 
+    let scanned = files.len();
     if cancelled.load(Ordering::Relaxed) {
         let elapsed = start.elapsed().as_millis();
         let envelope = OutputEnvelope {
-            meta: Some(MetaInfo {
-                elapsed_ms: elapsed,
-                timeout: true,
-                files_scanned: files.len(),
-                files_matched: 0,
-                total_matches: None,
-            }),
-            files: None,
-            tree: None,
-            graph: None,
-            symbols: None,
-            counts: None,
-            stats: None,
+            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
             error: Some("Operation timed out".into()),
+            ..Default::default()
         };
-        yaml_output::write_output(&envelope);
+        emit(&envelope, format, &args.output);
         return 2;
     }
 
@@ -468,23 +415,13 @@ fn execute_stats(
     let timed_out = cancelled.load(Ordering::Relaxed);
 
     let envelope = OutputEnvelope {
-        meta: Some(MetaInfo {
-            elapsed_ms: elapsed,
-            timeout: timed_out,
-            files_scanned: files.len(),
-            files_matched: files.len(),
-            total_matches: None,
-        }),
-        files: None,
-        tree: None,
-        graph: None,
-        symbols: None,
-        counts: None,
+        meta: Some(make_meta(elapsed, timed_out, scanned, scanned, None)),
         stats: Some(stats_output),
-        error: if timed_out { Some("Operation timed out".into()) } else { None },
+        error: timeout_error(timed_out),
+        ..Default::default()
     };
 
-    yaml_output::write_output(&envelope);
+    emit(&envelope, format, &args.output);
     if timed_out { 2 } else { 0 }
 }
 
@@ -494,22 +431,17 @@ fn execute_count(
     filter: &exclusion::ExclusionFilter,
     cancelled: &AtomicBool,
     start: Instant,
+    format: OutputFormat,
 ) -> i32 {
     let pattern = args.find.as_ref().unwrap();
     let matcher = match Matcher::build(pattern, args.is_regex) {
         Ok(m) => m,
         Err(e) => {
             let envelope = OutputEnvelope {
-                meta: None,
-                files: None,
-                tree: None,
-                graph: None,
-                symbols: None,
-                counts: None,
-                stats: None,
                 error: Some(e),
+                ..Default::default()
             };
-            yaml_output::write_output(&envelope);
+            emit(&envelope, format, &args.output);
             return 1;
         }
     };
@@ -521,26 +453,16 @@ fn execute_count(
     };
 
     let candidate_files = scanner::find_files(root, &globs, filter, cancelled);
+    let scanned = candidate_files.len();
 
     if cancelled.load(Ordering::Relaxed) {
         let elapsed = start.elapsed().as_millis();
         let envelope = OutputEnvelope {
-            meta: Some(MetaInfo {
-                elapsed_ms: elapsed,
-                timeout: true,
-                files_scanned: candidate_files.len(),
-                files_matched: 0,
-                total_matches: Some(0),
-            }),
-            files: None,
-            tree: None,
-            graph: None,
-            symbols: None,
-            counts: None,
-            stats: None,
+            meta: Some(make_meta(elapsed, true, scanned, 0, Some(0))),
             error: Some("Operation timed out".into()),
+            ..Default::default()
         };
-        yaml_output::write_output(&envelope);
+        emit(&envelope, format, &args.output);
         return 2;
     }
 
@@ -548,24 +470,17 @@ fn execute_count(
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
+    let count_entries = apply_limit(count_entries, args.limit);
+    let matched = count_entries.len();
+
     let envelope = OutputEnvelope {
-        meta: Some(MetaInfo {
-            elapsed_ms: elapsed,
-            timeout: timed_out,
-            files_scanned: candidate_files.len(),
-            files_matched: count_entries.len(),
-            total_matches: Some(total),
-        }),
-        files: None,
-        tree: None,
-        graph: None,
-        symbols: None,
+        meta: Some(make_meta(elapsed, timed_out, scanned, matched, Some(total))),
         counts: Some(count_entries),
-        stats: None,
         error: if timed_out { Some("Operation timed out — partial results may be incomplete".into()) } else { None },
+        ..Default::default()
     };
 
-    yaml_output::write_output(&envelope);
+    emit(&envelope, format, &args.output);
     if timed_out { 2 } else { 0 }
 }
 

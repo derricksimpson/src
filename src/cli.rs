@@ -3,7 +3,6 @@ pub struct CliArgs {
     pub root: String,
     pub globs: Vec<String>,
     pub find: Option<String>,
-    pub pad: usize,
     pub timeout: Option<u64>,
     pub excludes: Vec<String>,
     pub no_defaults: bool,
@@ -14,6 +13,15 @@ pub struct CliArgs {
     pub symbols: bool,
     pub count: bool,
     pub stats: bool,
+    pub limit: Option<usize>,
+    pub format: OutputFormatArg,
+    pub output: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OutputFormatArg {
+    Yaml,
+    Json,
 }
 
 #[derive(Debug)]
@@ -27,7 +35,6 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut root: Option<String> = None;
     let mut globs = Vec::new();
     let mut find: Option<String> = None;
-    let mut pad: usize = 0;
     let mut timeout: Option<u64> = None;
     let mut excludes = Vec::new();
     let mut no_defaults = false;
@@ -38,30 +45,32 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut symbols = false;
     let mut count = false;
     let mut stats = false;
+    let mut limit: Option<usize> = None;
+    let mut format = OutputFormatArg::Yaml;
+    let mut output: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--root" | "-d" => {
+            "--dir" | "--root" | "-d" => {
                 i += 1;
-                if i >= args.len() { return Err("Missing value for --root".into()); }
+                if i >= args.len() { return Err("Missing value for --dir".into()); }
                 root = Some(args[i].clone());
             }
-            "--r" => {
+            "--glob" | "--r" | "-g" => {
                 i += 1;
-                if i >= args.len() { return Err("Missing value for --r".into()); }
+                if i >= args.len() { return Err("Missing value for --glob".into()); }
                 globs.push(args[i].clone());
             }
-            "--f" => {
+            "--find" | "--f" | "-f" => {
                 i += 1;
-                if i >= args.len() { return Err("Missing value for --f".into()); }
+                if i >= args.len() { return Err("Missing value for --find".into()); }
                 find = Some(args[i].clone());
             }
-            "--pad" => {
+            "--context" | "--pad" | "-C" => {
                 i += 1;
-                if i >= args.len() { return Err("Missing value for --pad".into()); }
-                pad = args[i].parse::<usize>()
-                    .map_err(|_| format!("Invalid integer for --pad: {}", args[i]))?;
+                if i >= args.len() { return Err("Missing value for --context".into()); }
+                // Legacy flag — ignored. Search always returns full file content.
             }
             "--timeout" => {
                 i += 1;
@@ -73,6 +82,9 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 i += 1;
                 if i >= args.len() { return Err("Missing value for --exclude".into()); }
                 excludes.push(args[i].clone());
+            }
+            "--no-line-numbers" => {
+                line_numbers = false;
             }
             "--line-numbers" => {
                 i += 1;
@@ -90,26 +102,47 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 }
             }
             "--graph" => graph = true,
-            "--symbols" | "--s" => symbols = true,
-            "--count" => count = true,
-            "--stats" | "--st" => stats = true,
+            "--symbols" | "--s" | "-s" => symbols = true,
+            "--count" | "-c" => count = true,
+            "--stats" | "--st" | "-S" => stats = true,
             "--no-defaults" => no_defaults = true,
-            "--regex" => is_regex = true,
+            "--regex" | "-E" => is_regex = true,
+            "--limit" | "-L" => {
+                i += 1;
+                if i >= args.len() { return Err("Missing value for --limit".into()); }
+                limit = Some(args[i].parse::<usize>()
+                    .map_err(|_| format!("Invalid integer for --limit: {}", args[i]))?);
+            }
+            "--format" | "-F" => {
+                i += 1;
+                if i >= args.len() { return Err("Missing value for --format".into()); }
+                format = match args[i].to_ascii_lowercase().as_str() {
+                    "json" => OutputFormatArg::Json,
+                    "yaml" | "yml" => OutputFormatArg::Yaml,
+                    other => return Err(format!("Unknown format: '{}'. Supported: yaml, json", other)),
+                };
+            }
+            "--json" => format = OutputFormatArg::Json,
+            "--output" | "-o" => {
+                i += 1;
+                if i >= args.len() { return Err("Missing value for --output".into()); }
+                output = Some(args[i].clone());
+            }
             "--help" | "-h" | "-?" => return Ok(CliAction::Help),
-            "--version" => return Ok(CliAction::Version),
+            "--version" | "-V" => return Ok(CliAction::Version),
             other => return Err(format!("Unknown option: {}\nRun 'src --help' for usage information.", other)),
         }
         i += 1;
     }
 
     if count && find.is_none() {
-        return Err("--count requires --f <pattern>".into());
+        return Err("--count requires --find <pattern>".into());
     }
 
     let mut exclusive_count = 0;
     let mut exclusive_names = Vec::new();
-    if find.is_some() && !count { exclusive_count += 1; exclusive_names.push("--f"); }
-    if find.is_some() && count { exclusive_count += 1; exclusive_names.push("--f --count"); }
+    if find.is_some() && !count { exclusive_count += 1; exclusive_names.push("--find"); }
+    if find.is_some() && count { exclusive_count += 1; exclusive_names.push("--find --count"); }
     if !lines.is_empty() { exclusive_count += 1; exclusive_names.push("--lines"); }
     if graph { exclusive_count += 1; exclusive_names.push("--graph"); }
     if symbols { exclusive_count += 1; exclusive_names.push("--symbols"); }
@@ -126,7 +159,6 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
         root,
         globs,
         find,
-        pad,
         timeout,
         excludes,
         no_defaults,
@@ -137,6 +169,9 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
         symbols,
         count,
         stats,
+        limit,
+        format,
+        output,
     }))
 }
 
@@ -149,45 +184,55 @@ Usage:
 
 Modes:
   (default)               Show directory hierarchy containing source files
-  --r <glob>              List files matching glob patterns (repeatable)
-  --f <pattern>           Search file contents for a pattern
+  --glob, -g <glob>       List files matching glob patterns (repeatable)
+  --find, -f <pattern>    Search file contents for a pattern
   --lines "<specs>"       Extract specific line ranges from files
   --graph                 Show project-internal dependency graph
-  --symbols, --s          Extract symbol declarations from source files
-  --stats, --st           Show codebase statistics (files, lines, bytes by language)
+  --symbols, -s           Extract symbol declarations from source files
+  --stats, -S             Show codebase statistics (files, lines, bytes by language)
 
 Options:
-  --root, -d <path>       Root directory (default: current directory)
-  --r <glob>              File glob pattern (repeatable, e.g. --r *.ts --r *.cs)
-  --f <pattern>           Search pattern (use | for OR, e.g. Payment|Invoice)
+  --dir, -d <path>        Root directory (default: current directory)
+  --glob, -g <glob>       File glob pattern (repeatable, e.g. -g *.ts -g *.cs)
+  --find, -f <pattern>    Search pattern (use | for OR, e.g. Payment|Invoice)
   --lines "<specs>"       Line specs: "file:start:end file2:start:end" (repeatable)
   --graph                 Emit source dependency graph
-  --symbols, --s          Extract fn/struct/class/enum/trait declarations
-  --count                 Show match counts per file (requires --f)
-  --stats, --st           File counts, line counts, byte sizes by extension
-  --pad <n>               Context lines before/after each match (default: 0)
-  --line-numbers off      Suppress per-line number prefixes in content output
+  --symbols, -s           Extract symbol declarations (compact: signature :start:end)
+  --count, -c             Show match counts per file (requires --find)
+  --stats, -S             File counts, line counts, byte sizes by extension
+  --limit, -L <n>         Max number of files in the output
+  --no-line-numbers       Suppress per-line number prefixes in content output
   --timeout <secs>        Max execution time in seconds
   --exclude <name>        Additional exclusions (repeatable)
   --no-defaults           Disable built-in exclusions (node_modules, .git, etc.)
-  --regex                 Treat --f pattern as a regular expression
+  --regex, -E             Treat --find pattern as a regular expression
+  --format, -F <fmt>      Output format: yaml (default) or json
+  --json                  Shorthand for --format json
+  --output, -o <path>     Write output to file instead of stdout
   --help, -h              Show this help
-  --version               Show version
+  --version, -V           Show version
+
+Aliases:
+  --r, --f, --s, --st, --root, --line-numbers off
+  Legacy aliases are kept for backward compatibility.
 
 Examples:
   src                                             Show directory tree
-  src --r *.rs                                    List all Rust files
-  src --r *.ts --f "import"                       Search TypeScript files for imports
-  src --f "TODO|FIXME" --pad 2                    Find TODOs with 2 lines of context
-  src --f "pub fn" --line-numbers off             Search without line number prefixes
+  src -g *.rs                                     List all Rust files
+  src -g *.ts -f "import"                         Search TypeScript files for imports
+  src -f "TODO|FIXME"                             Find TODOs (full file content returned)
+  src -f "pub fn" --no-line-numbers               Search without line number prefixes
   src --lines "src/main.rs:1:20 src/cli.rs:18:40" Pull exact line ranges
   src --graph                                     Show dependency graph
-  src --graph --r *.rs                            Rust-only dependency graph
-  src --symbols --r *.rs                          Extract Rust symbol declarations
-  src --r *.ts --f "import" --count               Count import occurrences per file
+  src --graph -g *.rs                             Rust-only dependency graph
+  src -s -g *.rs                                  Extract Rust symbol declarations
+  src -g *.ts -f "import" -c                      Count import occurrences per file
   src --stats                                     Codebase statistics overview
-    src -d /path/to/project                         Scan a specific directory
-    "#);
+  src -d /path/to/project                         Scan a specific directory
+  src -f "TODO" --limit 10                        Find TODOs, cap at 10 files
+  src --symbols --json                            Symbols in JSON format
+  src --stats -o stats.yaml                       Write stats to file
+"#);
 }
 
 #[cfg(test)]
@@ -210,6 +255,9 @@ mod tests {
                 assert!(!a.stats);
                 assert!(!a.count);
                 assert!(a.lines.is_empty());
+                assert!(a.limit.is_none());
+                assert_eq!(a.format, OutputFormatArg::Yaml);
+                assert!(a.output.is_none());
             }
             _ => panic!("Expected Run"),
         }
@@ -228,12 +276,25 @@ mod tests {
     }
 
     #[test]
+    fn version_short_flag() {
+        assert!(matches!(parse_args(&args(&["-V"])).unwrap(), CliAction::Version));
+    }
+
+    #[test]
     fn root_directory() {
         match parse_args(&args(&["-d", "/tmp"])).unwrap() {
             CliAction::Run(a) => assert_eq!(a.root, "/tmp"),
             _ => panic!("Expected Run"),
         }
         match parse_args(&args(&["--root", "/tmp"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.root, "/tmp"),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn dir_long_flag() {
+        match parse_args(&args(&["--dir", "/tmp"])).unwrap() {
             CliAction::Run(a) => assert_eq!(a.root, "/tmp"),
             _ => panic!("Expected Run"),
         }
@@ -250,11 +311,35 @@ mod tests {
     }
 
     #[test]
+    fn glob_long_flag() {
+        match parse_args(&args(&["--glob", "*.rs"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.globs, vec!["*.rs"]),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn glob_short_flag() {
+        match parse_args(&args(&["-g", "*.rs"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.globs, vec!["*.rs"]),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
     fn multiple_globs() {
         match parse_args(&args(&["--r", "*.rs", "--r", "*.ts"])).unwrap() {
             CliAction::Run(a) => {
                 assert_eq!(a.globs, vec!["*.rs", "*.ts"]);
             }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn multiple_globs_mixed_aliases() {
+        match parse_args(&args(&["-g", "*.rs", "--glob", "*.ts", "--r", "*.go"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.globs, vec!["*.rs", "*.ts", "*.go"]),
             _ => panic!("Expected Run"),
         }
     }
@@ -270,17 +355,39 @@ mod tests {
     }
 
     #[test]
-    fn pad_option() {
-        match parse_args(&args(&["--f", "test", "--pad", "3"])).unwrap() {
-            CliAction::Run(a) => assert_eq!(a.pad, 3),
+    fn find_long_flag() {
+        match parse_args(&args(&["--find", "pub fn"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.find, Some("pub fn".to_owned())),
             _ => panic!("Expected Run"),
         }
     }
 
     #[test]
-    fn pad_invalid_returns_error() {
-        let result = parse_args(&args(&["--pad", "abc"]));
-        assert!(result.is_err());
+    fn find_short_flag() {
+        match parse_args(&args(&["-f", "pub fn"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.find, Some("pub fn".to_owned())),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn legacy_pad_accepted_and_ignored() {
+        match parse_args(&args(&["--f", "test", "--pad", "3"])).unwrap() {
+            CliAction::Run(_) => {}
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn legacy_context_accepted_and_ignored() {
+        match parse_args(&args(&["-f", "test", "--context", "5"])).unwrap() {
+            CliAction::Run(_) => {}
+            _ => panic!("Expected Run"),
+        }
+        match parse_args(&args(&["-f", "test", "-C", "5"])).unwrap() {
+            CliAction::Run(_) => {}
+            _ => panic!("Expected Run"),
+        }
     }
 
     #[test]
@@ -322,8 +429,24 @@ mod tests {
     }
 
     #[test]
+    fn regex_short_flag() {
+        match parse_args(&args(&["-f", "test", "-E"])).unwrap() {
+            CliAction::Run(a) => assert!(a.is_regex),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
     fn line_numbers_off() {
         match parse_args(&args(&["--line-numbers", "off"])).unwrap() {
+            CliAction::Run(a) => assert!(!a.line_numbers),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn no_line_numbers_flag() {
+        match parse_args(&args(&["--no-line-numbers"])).unwrap() {
             CliAction::Run(a) => assert!(!a.line_numbers),
             _ => panic!("Expected Run"),
         }
@@ -362,8 +485,16 @@ mod tests {
     }
 
     #[test]
-    fn symbols_short_flag() {
+    fn symbols_legacy_short_flag() {
         match parse_args(&args(&["--s"])).unwrap() {
+            CliAction::Run(a) => assert!(a.symbols),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn symbols_short_flag() {
+        match parse_args(&args(&["-s"])).unwrap() {
             CliAction::Run(a) => assert!(a.symbols),
             _ => panic!("Expected Run"),
         }
@@ -373,12 +504,23 @@ mod tests {
     fn count_requires_find() {
         let result = parse_args(&args(&["--count"]));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("--count requires --f"));
+        assert!(result.unwrap_err().contains("--count requires --find"));
     }
 
     #[test]
     fn count_with_find_succeeds() {
         match parse_args(&args(&["--f", "test", "--count"])).unwrap() {
+            CliAction::Run(a) => {
+                assert!(a.count);
+                assert_eq!(a.find, Some("test".to_owned()));
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn count_short_flag() {
+        match parse_args(&args(&["-f", "test", "-c"])).unwrap() {
             CliAction::Run(a) => {
                 assert!(a.count);
                 assert_eq!(a.find, Some("test".to_owned()));
@@ -396,8 +538,16 @@ mod tests {
     }
 
     #[test]
-    fn stats_short_flag() {
+    fn stats_legacy_short_flag() {
         match parse_args(&args(&["--st"])).unwrap() {
+            CliAction::Run(a) => assert!(a.stats),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn stats_short_flag() {
+        match parse_args(&args(&["-S"])).unwrap() {
             CliAction::Run(a) => assert!(a.stats),
             _ => panic!("Expected Run"),
         }
@@ -442,8 +592,26 @@ mod tests {
     }
 
     #[test]
+    fn missing_value_for_dir() {
+        let result = parse_args(&args(&["--dir"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn missing_value_for_r() {
         let result = parse_args(&args(&["--r"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_glob() {
+        let result = parse_args(&args(&["--glob"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_g() {
+        let result = parse_args(&args(&["-g"]));
         assert!(result.is_err());
     }
 
@@ -454,8 +622,20 @@ mod tests {
     }
 
     #[test]
+    fn missing_value_for_find() {
+        let result = parse_args(&args(&["--find"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn missing_value_for_pad() {
         let result = parse_args(&args(&["--pad"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_value_for_context() {
+        let result = parse_args(&args(&["--context"]));
         assert!(result.is_err());
     }
 
@@ -490,7 +670,19 @@ mod tests {
                 assert_eq!(a.root, "/tmp");
                 assert_eq!(a.globs, vec!["*.rs"]);
                 assert_eq!(a.find, Some("pub fn".to_owned()));
-                assert_eq!(a.pad, 2);
+                assert_eq!(a.timeout, Some(30));
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn combined_options_new_style() {
+        match parse_args(&args(&["-d", "/tmp", "-g", "*.rs", "-f", "pub fn", "-C", "2", "--timeout", "30"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.root, "/tmp");
+                assert_eq!(a.globs, vec!["*.rs"]);
+                assert_eq!(a.find, Some("pub fn".to_owned()));
                 assert_eq!(a.timeout, Some(30));
             }
             _ => panic!("Expected Run"),
@@ -506,9 +698,134 @@ mod tests {
     }
 
     #[test]
-    fn default_pad_zero() {
-        match parse_args(&args(&[])).unwrap() {
-            CliAction::Run(a) => assert_eq!(a.pad, 0),
+    fn legacy_context_flags_accepted() {
+        assert!(parse_args(&args(&["-f", "test", "--pad", "0"])).is_ok());
+        assert!(parse_args(&args(&["-f", "test", "-C", "999"])).is_ok());
+    }
+
+    // ── New flag tests ──
+
+    #[test]
+    fn limit_flag() {
+        match parse_args(&args(&["--limit", "10"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.limit, Some(10)),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn limit_short_flag() {
+        match parse_args(&args(&["-L", "5"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.limit, Some(5)),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn limit_invalid_returns_error() {
+        let result = parse_args(&args(&["--limit", "abc"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid integer for --limit"));
+    }
+
+    #[test]
+    fn missing_value_for_limit() {
+        let result = parse_args(&args(&["--limit"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn format_json_long() {
+        match parse_args(&args(&["--format", "json"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.format, OutputFormatArg::Json),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn format_yaml_long() {
+        match parse_args(&args(&["--format", "yaml"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.format, OutputFormatArg::Yaml),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn format_yml_alias() {
+        match parse_args(&args(&["--format", "yml"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.format, OutputFormatArg::Yaml),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn format_short_flag() {
+        match parse_args(&args(&["-F", "json"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.format, OutputFormatArg::Json),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn format_case_insensitive() {
+        match parse_args(&args(&["--format", "JSON"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.format, OutputFormatArg::Json),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn format_unknown_returns_error() {
+        let result = parse_args(&args(&["--format", "xml"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown format"));
+    }
+
+    #[test]
+    fn missing_value_for_format() {
+        let result = parse_args(&args(&["--format"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn json_shorthand_flag() {
+        match parse_args(&args(&["--json"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.format, OutputFormatArg::Json),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn output_flag() {
+        match parse_args(&args(&["--output", "result.yaml"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.output, Some("result.yaml".to_owned())),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn output_short_flag() {
+        match parse_args(&args(&["-o", "out.json"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.output, Some("out.json".to_owned())),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn missing_value_for_output() {
+        let result = parse_args(&args(&["--output"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn combined_limit_format_output() {
+        match parse_args(&args(&["-f", "test", "--limit", "20", "--json", "-o", "result.json"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.find, Some("test".to_owned()));
+                assert_eq!(a.limit, Some(20));
+                assert_eq!(a.format, OutputFormatArg::Json);
+                assert_eq!(a.output, Some("result.json".to_owned()));
+            }
             _ => panic!("Expected Run"),
         }
     }

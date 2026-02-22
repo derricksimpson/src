@@ -7,11 +7,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use memmap2::Mmap;
 use rayon::prelude::*;
 
+use crate::file_reader::{MMAP_THRESHOLD, BINARY_CHECK_SIZE, is_binary};
 use crate::models::{LangStats, LargestFile, StatsOutput, StatsTotals};
 use crate::path_helper;
-
-const MMAP_THRESHOLD: u64 = 64 * 1024;
-const BINARY_CHECK_SIZE: usize = 8192;
 
 struct FileInfo {
     path: String,
@@ -163,9 +161,4 @@ fn bytecount_newlines(data: &[u8]) -> usize {
         count += 1;
     }
     count
-}
-
-fn is_binary(data: &[u8]) -> bool {
-    let check_len = data.len().min(BINARY_CHECK_SIZE);
-    data[..check_len].contains(&0)
 }
