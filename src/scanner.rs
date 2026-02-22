@@ -103,28 +103,30 @@ pub fn find_files(
     filter: &ExclusionFilter,
     cancelled: &AtomicBool,
 ) -> Vec<String> {
-    let mut results = Vec::new();
-    find_files_recursive(root, globs, filter, cancelled, &mut results);
+    let has_path_glob = globs.iter().any(|g| g.contains('/') || g.contains('\\'));
+    let mut results = find_files_parallel(root, root, globs, has_path_glob, filter, cancelled);
     results.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
     results
 }
 
-fn find_files_recursive(
+fn find_files_parallel(
+    root: &Path,
     dir: &Path,
     globs: &[String],
+    has_path_glob: bool,
     filter: &ExclusionFilter,
     cancelled: &AtomicBool,
-    results: &mut Vec<String>,
-) {
+) -> Vec<String> {
     if cancelled.load(Ordering::Relaxed) {
-        return;
+        return Vec::new();
     }
 
     let entries = match fs::read_dir(dir) {
         Ok(rd) => rd,
-        Err(_) => return,
+        Err(_) => return Vec::new(),
     };
 
+    let mut files = Vec::new();
     let mut subdirs = Vec::new();
 
     for entry in entries.flatten() {
@@ -136,8 +138,15 @@ fn find_files_recursive(
         let name_str = name.to_string_lossy();
 
         if ft.is_file() {
-            if glob::matches_any(&name_str, globs) {
-                results.push(entry.path().to_string_lossy().into_owned());
+            let matched = if has_path_glob {
+                let abs = entry.path();
+                let rel = crate::path_helper::normalized_relative(root, &abs);
+                glob::matches_any(&name_str, globs) || glob::matches_any(&rel, globs)
+            } else {
+                glob::matches_any(&name_str, globs)
+            };
+            if matched {
+                files.push(entry.path().to_string_lossy().into_owned());
             }
         } else if ft.is_dir() && !filter.is_excluded(&name_str) {
             subdirs.push(entry.path());
@@ -146,14 +155,12 @@ fn find_files_recursive(
 
     let sub_results: Vec<Vec<String>> = subdirs
         .par_iter()
-        .map(|subdir| {
-            let mut sub = Vec::new();
-            find_files_recursive(subdir, globs, filter, cancelled, &mut sub);
-            sub
-        })
+        .map(|subdir| find_files_parallel(root, subdir, globs, has_path_glob, filter, cancelled))
         .collect();
 
     for sub in sub_results {
-        results.extend(sub);
+        files.extend(sub);
     }
+
+    files
 }

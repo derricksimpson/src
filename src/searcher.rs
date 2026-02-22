@@ -1,17 +1,13 @@
-use std::fs::{self, File};
-use std::io::{BufReader, Read};
+use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use memmap2::Mmap;
 use rayon::prelude::*;
 use regex::Regex;
 
+use crate::file_reader;
 use crate::models::{FileChunk, FileEntry};
 use crate::path_helper;
-
-const BINARY_CHECK_SIZE: usize = 8192;
-const MMAP_THRESHOLD: u64 = 64 * 1024;
 
 pub enum Matcher {
     Literal(String),
@@ -75,7 +71,6 @@ pub fn search_files(
     file_paths: &[String],
     root: &Path,
     matcher: &Matcher,
-    pad_lines: usize,
     line_numbers: bool,
     cancelled: &AtomicBool,
 ) -> Vec<FileEntry> {
@@ -85,7 +80,7 @@ pub fn search_files(
             if cancelled.load(Ordering::Relaxed) {
                 return None;
             }
-            process_file(file_path, root, matcher, pad_lines, line_numbers)
+            process_file(file_path, root, matcher, line_numbers)
         })
         .collect();
 
@@ -97,133 +92,67 @@ fn process_file(
     file_path: &str,
     root: &Path,
     matcher: &Matcher,
-    pad_lines: usize,
     line_numbers: bool,
 ) -> Option<FileEntry> {
     let path = Path::new(file_path);
     let relative = path_helper::normalized_relative(root, path);
 
-    let metadata = match fs::metadata(path) {
-        Ok(m) => m,
+    if fs::metadata(path).is_err() {
+        return Some(FileEntry {
+            path: relative,
+            contents: None,
+            error: Some("File not found".to_string()),
+            chunks: None,
+        });
+    }
+
+    let content = match file_reader::read_file(path) {
+        Ok(Some(c)) => c,
+        Ok(None) => return None,
         Err(e) => return Some(FileEntry {
             path: relative,
             contents: None,
-            error: Some(e.to_string()),
+            error: Some(e),
             chunks: None,
         }),
     };
 
-    let file_len = metadata.len();
-    if file_len == 0 {
-        return None;
-    }
-
-    if file_len >= MMAP_THRESHOLD {
-        match process_file_mmap(path, &relative, matcher, pad_lines, line_numbers) {
-            Ok(entry) => entry,
-            Err(e) => Some(FileEntry {
-                path: relative,
-                contents: None,
-                error: Some(e),
-                chunks: None,
-            }),
-        }
-    } else {
-        match process_file_buffered(path, &relative, matcher, pad_lines, line_numbers) {
-            Ok(entry) => entry,
-            Err(e) => Some(FileEntry {
-                path: relative,
-                contents: None,
-                error: Some(e),
-                chunks: None,
-            }),
-        }
-    }
-}
-
-fn process_file_mmap(
-    path: &Path,
-    relative: &str,
-    matcher: &Matcher,
-    pad_lines: usize,
-    line_numbers: bool,
-) -> Result<Option<FileEntry>, String> {
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let mmap = unsafe { Mmap::map(&file) }.map_err(|e| e.to_string())?;
-    let data = &mmap[..];
-
-    if is_binary(data) {
-        return Ok(None);
-    }
-
-    let content = std::str::from_utf8(data).map_err(|_| "Not valid UTF-8".to_string())?;
-    search_content(content, relative, matcher, pad_lines, line_numbers)
-}
-
-fn process_file_buffered(
-    path: &Path,
-    relative: &str,
-    matcher: &Matcher,
-    pad_lines: usize,
-    line_numbers: bool,
-) -> Result<Option<FileEntry>, String> {
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let mut reader = BufReader::with_capacity(64 * 1024, file);
-
-    let mut check_buf = [0u8; BINARY_CHECK_SIZE];
-    let n = reader.read(&mut check_buf).map_err(|e| e.to_string())?;
-    if is_binary(&check_buf[..n]) {
-        return Ok(None);
-    }
-
-    let mut all = Vec::from(&check_buf[..n]);
-    reader.read_to_end(&mut all).map_err(|e| e.to_string())?;
-
-    let content = std::str::from_utf8(&all).map_err(|_| "Not valid UTF-8".to_string())?;
-    search_content(content, relative, matcher, pad_lines, line_numbers)
+    search_content(&content, &relative, matcher, line_numbers)
 }
 
 fn search_content(
     content: &str,
     relative: &str,
     matcher: &Matcher,
-    pad_lines: usize,
     line_numbers: bool,
-) -> Result<Option<FileEntry>, String> {
+) -> Option<FileEntry> {
     let lines: Vec<&str> = content.lines().collect();
-    let line_count = lines.len();
 
-    let mut matching_indices = Vec::new();
+    let has_match = lines.iter().any(|line| matcher.is_match(line));
+    if !has_match {
+        return None;
+    }
+
+    let mut output = String::new();
     for (i, line) in lines.iter().enumerate() {
-        if matcher.is_match(line) {
-            matching_indices.push(i);
+        if line_numbers {
+            let line_num = i + 1;
+            output.push_str(&line_num.to_string());
+            output.push_str(".  ");
         }
+        output.push_str(line);
+        output.push('\n');
     }
 
-    if matching_indices.is_empty() {
-        return Ok(None);
-    }
-
-    let ranges = merge_ranges(&matching_indices, pad_lines, line_count);
-    let chunks = build_chunks(&lines, &ranges, line_numbers);
-
-    if chunks.len() == 1 && chunks[0].start_line == 1 && chunks[0].end_line == line_count {
-        Ok(Some(FileEntry {
-            path: relative.to_owned(),
-            contents: Some(chunks.into_iter().next().unwrap().content),
-            error: None,
-            chunks: None,
-        }))
-    } else {
-        Ok(Some(FileEntry {
-            path: relative.to_owned(),
-            contents: None,
-            error: None,
-            chunks: Some(chunks),
-        }))
-    }
+    Some(FileEntry {
+        path: relative.to_owned(),
+        contents: Some(output),
+        error: None,
+        chunks: None,
+    })
 }
 
+#[allow(dead_code)]
 fn merge_ranges(
     matching_indices: &[usize],
     pad: usize,
@@ -270,11 +199,6 @@ pub fn build_chunks(lines: &[&str], ranges: &[(usize, usize)], line_numbers: boo
         });
     }
     chunks
-}
-
-fn is_binary(data: &[u8]) -> bool {
-    let check_len = data.len().min(BINARY_CHECK_SIZE);
-    data[..check_len].contains(&0)
 }
 
 #[cfg(test)]
@@ -414,21 +338,6 @@ mod tests {
         assert_eq!(chunks.len(), 2);
         assert!(chunks[0].content.contains("a"));
         assert!(chunks[1].content.contains("e"));
-    }
-
-    #[test]
-    fn is_binary_detects_null_bytes() {
-        assert!(is_binary(&[0x48, 0x65, 0x00, 0x6c]));
-    }
-
-    #[test]
-    fn is_binary_clean_text() {
-        assert!(!is_binary(b"Hello, world!"));
-    }
-
-    #[test]
-    fn is_binary_empty() {
-        assert!(!is_binary(&[]));
     }
 
     #[test]
