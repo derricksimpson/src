@@ -1,121 +1,66 @@
 ---
 name: src
-description: Fast source code scanner. Use when you need to explore a codebase, find files, search contents, extract line ranges, show dependency graphs, extract symbol declarations, count matches, or get codebase statistics. All in parallel!
+description: Fast source code scanner. Use when you need to explore a codebase, find files, search contents, extract line ranges, show dependency graphs, extract symbol declarations, count matches, or get codebase statistics. All in parallel with a single execution!
 ---
 
 # src — Fast Source Code Scanner
 
-`src` is a single-binary CLI for interrogating source code. It replaces multiple `Read`/`Grep`/`Glob` calls with one command - capable of reading multiple files in one command and in parallel. Output is always structured YAML.
+`src` is a single-binary CLI for interrogating source code. It replaces multiple `Read`/`Grep`/`Glob` calls with one command - capable of reading multiple files in one command and in parallel. Output is structured YAML (default) or JSON.
 
 ## Modes
+src — extremely fast source code interrogation tool for retreiving  details from many source code in parallel and one execution.
 
-| Mode | Flag | Description |
-|------|------|-------------|
-| Tree | *(default)* | Directory hierarchy of source files |
-| File list | `--r <glob>` | List files matching globs (repeatable) |
-| Search | `--f <pattern>` | Search file contents (`\|` for OR, `--regex` for regex) |
-| Lines | `--lines "<specs>"` | Extract exact line ranges (repeatable) |
-| Graph | `--graph` | Project-internal dependency graph |
-| Symbols | `--symbols` / `--s` | Extract fn/struct/class/enum/trait declarations |
-| Count | `--f <pat> --count` | Per-file match counts (requires `--f`) |
-| Stats | `--stats` / `--st` | Codebase statistics by language/extension |
+Usage:
+  src [options]
 
-Modes are mutually exclusive: `--f`, `--lines`, `--graph`, `--symbols`, `--stats`, and `--f --count` cannot be combined with each other.
+Modes:
+  (default)               Show directory hierarchy containing source files
+  --glob, -g <glob>       List files matching glob patterns (repeatable)
+  --find, -f <pattern>    Search file contents for a pattern
+  --lines "<specs>"       Extract specific line ranges from files
+  --graph                 Show project-internal dependency graph
+  --symbols, -s           Extract symbol declarations from source files
+  --stats, -S             Show codebase statistics (files, lines, bytes by language)
 
-## Options
+Options:
+  --dir, -d <path>        Root directory (default: current directory)
+  --glob, -g <glob>       File glob pattern (repeatable, e.g. -g *.ts -g *.cs)
+  --find, -f <pattern>    Search pattern (use | for OR, e.g. Payment|Invoice)
+  --lines "<specs>"       Line specs: "file:start:end file2:start:end" (repeatable)
+  --graph                 Emit source dependency graph
+  --symbols, -s           Extract symbol declarations (compact: signature :start:end)
+  --count, -c             Show match counts per file (requires --find)
+  --stats, -S             File counts, line counts, byte sizes by extension
+  --limit, -L <n>         Max number of files in the output
+  --no-line-numbers       Suppress per-line number prefixes in content output
+  --timeout <secs>        Max execution time in seconds
+  --exclude <name>        Additional exclusions (repeatable)
+  --no-defaults           Disable built-in exclusions (node_modules, .git, etc.)
+  --regex, -E             Treat --find pattern as a regular expression
+  --format, -F <fmt>      Output format: yaml (default) or json
+  --json                  Shorthand for --format json
+  --output, -o <path>     Write output to file instead of stdout
+  --help, -h              Show this help
+  --version, -V           Show version
 
-| Option | Purpose |
-|--------|---------|
-| `--r <glob>` | Filter by file glob (repeatable, scopes any mode) |
-| `--pad <n>` | Context lines around matches (search mode) |
-| `--line-numbers off` | Suppress line number prefixes in content |
-| `--regex` | Treat `--f` pattern as regex |
-| `-d <path>` | Set root directory |
-| `--exclude <name>` | Add exclusion (repeatable) |
-| `--no-defaults` | Disable built-in exclusions |
-| `--timeout <secs>` | Execution time limit |
+Aliases:
+  --r, --f, --s, --st, --root, --line-numbers off
+  Legacy aliases are kept for backward compatibility.
 
-## Quick Reference
+Examples:
+  src                                             Show directory tree
+  src -g *.rs                                     List all Rust files
+  src -g *.ts -f "import"                         Search TypeScript files for imports
+  src -f "TODO|FIXME"                             Find TODOs (full file content returned)
+  src -f "pub fn" --no-line-numbers               Search without line number prefixes
+  src --lines "src/main.rs:1:20 src/cli.rs:18:40" Pull exact line ranges
+  src --graph                                     Show dependency graph
+  src --graph -g *.rs                             Rust-only dependency graph
+  src -s -g *.rs                                  Extract Rust symbol declarations
+  src -g *.ts -f "import" -c                      Count import occurrences per file
+  src --stats                                     Codebase statistics overview
+  src -d /path/to/project                         Scan a specific directory
+  src -f "TODO" --limit 10                        Find TODOs, cap at 10 files
+  src --symbols --json                            Symbols in JSON format
+  src --stats -o stats.yaml                       Write stats to file
 
-```bash
-# Tree
-src
-src -d /path/to/project
-
-# File listing
-src --r "*.rs"
-src --r "*.ts" --r "*.tsx"
-
-# Search
-src --r "*.rs" --f "pub fn|pub struct"
-src --f "TODO|FIXME" --pad 2
-
-# Read full files (search trick: match everything with high pad)
-src --r "*.rs" --f "." --pad 999
-src --r "*.rs" --f "." --pad 999 --line-numbers off
-
-# Extract exact line ranges
-src --lines "src/main.rs:1:20 src/cli.rs:18:40"
-src --lines "src/main.rs:1:10" --lines "src/cli.rs:1:5"
-
-# Dependency graph
-src --graph
-src --graph --r "*.rs"
-
-# Symbol extraction
-src --symbols
-src --symbols --r "*.rs"
-src --s --r "*.ts"
-
-# Match counting
-src --r "*.rs" --f "pub fn" --count
-src --f "import" --count
-
-# Codebase statistics
-src --stats
-src --stats --r "*.rs"
-src --st
-```
-
-## Output Shapes
-
-**Tree** — `tree.children[].name`, `tree.files[]`
-**File list** — `files[].path`
-**Search / Lines** — `files[].contents` or `files[].chunks[].content` with `startLine`/`endLine`
-**Graph** — `graph[].file`, `graph[].imports[]`
-**Symbols** — `files[].path`, `files[].symbols[].kind/name/line/visibility/parent/signature`
-**Count** — `files[].path`, `files[].count`, `meta.totalMatches`
-**Stats** — `languages[].extension/files/lines/bytes`, `totals`, `largest[].path/lines/bytes`
-
-All modes include `meta.elapsedMs` and `meta.filesMatched`.
-
-## Supported Languages
-
-**Graph** (`--graph`) — Rust, TypeScript/JS, C#, Go, Python
-**Symbols** (`--symbols`) — Rust, TypeScript/JS, C#, Go, Python
-
-Symbol kinds: `fn`, `method`, `struct`, `class`, `enum`, `trait`, `interface`, `type`, `const`, `mod`, `namespace`, `var`, `export`
-
-## When to Use src vs Other Tools
-
-| Scenario | Use src | Use other tools |
-|----------|---------|-----------------|
-| Context from many files | `--r` + `--f` + `--pad` | Too many Read calls |
-| Exploring unfamiliar codebase | tree, then search | No |
-| Code structure overview | `--symbols` or `--stats` | No equivalent |
-| Pattern frequency analysis | `--f` + `--count` | No equivalent |
-| Module dependencies | `--graph` | No equivalent |
-| Know exact file + lines | `--lines` | Read with offset works too |
-| Single known file | No | Read tool is simpler |
-| Exact text in 1-2 files | No | Grep tool is simpler |
-
-## Tips
-
-- **Batch context gathering**: one `src --r "*.ts" --f "import" --pad 3` replaces dozens of reads.
-- **Start broad, narrow down**: tree → file list → symbols/search → `--lines` for surgical reads.
-- **Use `--symbols` to understand architecture**: shows every declaration without reading full files.
-- **Use `--count` for hotspot analysis**: find where a pattern appears most.
-- **Use `--stats` for project profiling**: instant breakdown by language, top files by size.
-- **Use `--graph` before refactoring**: understand the blast radius of changes.
-- **`--line-numbers off`** is ideal when feeding output to LLMs.
-- **`|` in `--f`** is lightweight OR — no `--regex` needed for multi-term search.
