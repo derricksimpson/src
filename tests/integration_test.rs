@@ -79,11 +79,34 @@ fn version_flag() {
     assert!(stdout.trim().contains("0.1."));
 }
 
+#[test]
+fn version_short_flag() {
+    let (stdout, _, code) = run_src(&["-V"]);
+    assert_eq!(code, 0);
+    assert!(stdout.trim().contains("0.1."));
+}
+
 // ── File Listing ──
 
 #[test]
 fn file_listing_rust() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--r", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("files:"));
+    assert!(stdout.contains("main.rs"));
+}
+
+#[test]
+fn file_listing_glob_long() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--glob", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("files:"));
+    assert!(stdout.contains("main.rs"));
+}
+
+#[test]
+fn file_listing_glob_short() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("files:"));
     assert!(stdout.contains("main.rs"));
@@ -100,6 +123,14 @@ fn file_listing_typescript() {
 #[test]
 fn file_listing_multiple_globs() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--r", "*.rs", "--r", "*.ts"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("main.rs"));
+    assert!(stdout.contains("utils.ts"));
+}
+
+#[test]
+fn file_listing_multiple_globs_mixed() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "--glob", "*.ts"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("main.rs"));
     assert!(stdout.contains("utils.ts"));
@@ -123,6 +154,22 @@ fn search_finds_pattern() {
 }
 
 #[test]
+fn search_find_long_flag() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "--find", "pub fn"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("files:"));
+    assert!(stdout.contains("pub fn"));
+}
+
+#[test]
+fn search_find_short_flag() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "-f", "pub fn"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("files:"));
+    assert!(stdout.contains("pub fn"));
+}
+
+#[test]
 fn search_case_insensitive() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--r", "*.rs", "--f", "PUB FN"]);
     assert_eq!(code, 0);
@@ -137,8 +184,26 @@ fn search_multi_term() {
 }
 
 #[test]
-fn search_with_pad() {
+fn search_returns_full_file_content() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "-f", "pub fn"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("files:"));
+    assert!(stdout.contains("contents:"));
+}
+
+#[test]
+fn legacy_pad_flag_accepted() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--r", "*.rs", "--f", "pub fn", "--pad", "2"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("files:"));
+}
+
+#[test]
+fn legacy_context_flags_accepted() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "-f", "pub fn", "--context", "2"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("files:"));
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "-f", "pub fn", "-C", "999"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("files:"));
 }
@@ -151,8 +216,22 @@ fn search_with_regex() {
 }
 
 #[test]
+fn search_with_regex_short() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "-f", r"fn \w+\(", "-E"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("files:"));
+}
+
+#[test]
 fn search_no_line_numbers() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--r", "*.rs", "--f", "fn", "--line-numbers", "off"]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("1.  "));
+}
+
+#[test]
+fn search_no_line_numbers_flag() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "-f", "fn", "--no-line-numbers"]);
     assert_eq!(code, 0);
     assert!(!stdout.contains("1.  "));
 }
@@ -212,42 +291,56 @@ fn graph_mode_filtered() {
 fn symbols_mode() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--symbols"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("files:"));
     assert!(stdout.contains("symbols:"));
-    assert!(stdout.contains("kind:"));
-    assert!(stdout.contains("name:"));
+    assert!(stdout.contains("path:"));
+    assert!(stdout.contains("funcs:") || stdout.contains("classes:") || stdout.contains("structs:"));
+}
+
+#[test]
+fn symbols_mode_short_flag() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("symbols:"));
+    assert!(stdout.contains("path:"));
 }
 
 #[test]
 fn symbols_mode_rust_only() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--symbols", "--r", "*.rs"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("kind: fn"));
-    assert!(stdout.contains("name: add") || stdout.contains("name: main") || stdout.contains("name: helper"));
+    assert!(stdout.contains("funcs:"));
+    assert!(stdout.contains("fn "));
+}
+
+#[test]
+fn symbols_mode_short_flags() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-g", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("funcs:"));
 }
 
 #[test]
 fn symbols_mode_typescript() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--symbols", "--r", "*.ts"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("kind: fn") || stdout.contains("kind: class"));
+    assert!(stdout.contains("funcs:") || stdout.contains("classes:"));
 }
 
 #[test]
 fn symbols_mode_csharp() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--symbols", "--r", "*.cs"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("files:"));
+    assert!(stdout.contains("symbols:"));
     assert!(stdout.contains("service.cs"));
-    assert!(stdout.contains("kind: namespace"));
-    assert!(stdout.contains("name: MyApp"));
+    assert!(stdout.contains("namespaces:"));
+    assert!(stdout.contains("MyApp"));
 }
 
 #[test]
 fn symbols_mode_go() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--symbols", "--r", "*.go"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("kind: struct") || stdout.contains("kind: fn"));
+    assert!(stdout.contains("structs:") || stdout.contains("funcs:"));
     assert!(stdout.contains("Server") || stdout.contains("NewServer"));
 }
 
@@ -255,7 +348,7 @@ fn symbols_mode_go() {
 fn symbols_mode_python() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--symbols", "--r", "*.py"]);
     assert_eq!(code, 0);
-    assert!(stdout.contains("kind: class"));
+    assert!(stdout.contains("classes:"));
     assert!(stdout.contains("Application"));
 }
 
@@ -264,6 +357,15 @@ fn symbols_mode_python() {
 #[test]
 fn count_mode() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--f", "fn", "--count"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("files:"));
+    assert!(stdout.contains("count:"));
+    assert!(stdout.contains("totalMatches:"));
+}
+
+#[test]
+fn count_mode_short_flags() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-f", "fn", "-c"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("files:"));
     assert!(stdout.contains("count:"));
@@ -290,8 +392,23 @@ fn stats_mode() {
 }
 
 #[test]
+fn stats_mode_short_flag() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-S"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("languages:"));
+    assert!(stdout.contains("totals:"));
+}
+
+#[test]
 fn stats_mode_filtered() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--stats", "--r", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("extension: rs"));
+}
+
+#[test]
+fn stats_mode_filtered_short() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-S", "-g", "*.rs"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("extension: rs"));
 }
@@ -316,7 +433,7 @@ fn mutual_exclusivity_error() {
 fn count_without_find_error() {
     let (_, stderr, code) = run_src_in(&fixture(), &["--count"]);
     assert_ne!(code, 0);
-    assert!(stderr.contains("--count requires --f"));
+    assert!(stderr.contains("--count requires --find"));
 }
 
 #[test]
@@ -340,6 +457,15 @@ fn meta_has_files_matched() {
     assert!(stdout.contains("filesMatched:"));
 }
 
+// ── Dir alias ──
+
+#[test]
+fn dir_long_flag() {
+    let (stdout, _, code) = run_src(&["--dir", &fixture()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("tree:"));
+}
+
 // ── Exclusion ──
 
 #[test]
@@ -357,4 +483,178 @@ fn timeout_option_accepted() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--timeout", "60"]);
     assert_eq!(code, 0);
     assert!(stdout.contains("tree:"));
+}
+
+// ── Limit ──
+
+#[test]
+fn limit_caps_file_listing() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.*", "--limit", "2"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("filesMatched: 2"));
+}
+
+#[test]
+fn limit_short_flag_works() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.*", "-L", "1"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("filesMatched: 1"));
+}
+
+#[test]
+fn limit_caps_search_results() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-f", "fn", "--limit", "1"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("filesMatched: 1"));
+}
+
+#[test]
+fn limit_larger_than_results_shows_all() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "--limit", "1000"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("main.rs"));
+}
+
+// ── JSON format ──
+
+#[test]
+fn json_format_flag() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "--format", "json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.starts_with('{'));
+    assert!(stdout.contains("\"meta\""));
+    assert!(stdout.contains("\"files\""));
+}
+
+#[test]
+fn json_shorthand() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.starts_with('{'));
+    assert!(stdout.contains("\"meta\""));
+}
+
+#[test]
+fn json_format_short_flag() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "-F", "json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.starts_with('{'));
+}
+
+#[test]
+fn json_tree_output() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"tree\""));
+    assert!(stdout.contains("\"name\""));
+}
+
+#[test]
+fn json_graph_output() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--graph", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"graph\""));
+}
+
+#[test]
+fn json_symbols_output() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-g", "*.rs", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"symbols\""));
+    assert!(stdout.contains("\"kind\""));
+}
+
+#[test]
+fn json_stats_output() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-S", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"languages\""));
+    assert!(stdout.contains("\"totals\""));
+}
+
+#[test]
+fn json_count_output() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-f", "fn", "-c", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"files\""));
+    assert!(stdout.contains("\"count\""));
+}
+
+// ── Output to file ──
+
+#[test]
+fn output_to_file() {
+    let tmp = std::env::temp_dir().join("src_test_output.yaml");
+    let tmp_str = tmp.to_string_lossy().to_string();
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "-o", &tmp_str]);
+    assert_eq!(code, 0);
+    assert!(stdout.is_empty() || stdout.trim().is_empty());
+    let content = std::fs::read_to_string(&tmp).unwrap();
+    assert!(content.contains("meta:"));
+    assert!(content.contains("main.rs"));
+    std::fs::remove_file(&tmp).ok();
+}
+
+#[test]
+fn output_to_file_json() {
+    let tmp = std::env::temp_dir().join("src_test_output.json");
+    let tmp_str = tmp.to_string_lossy().to_string();
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "--json", "-o", &tmp_str]);
+    assert_eq!(code, 0);
+    assert!(stdout.is_empty() || stdout.trim().is_empty());
+    let content = std::fs::read_to_string(&tmp).unwrap();
+    assert!(content.starts_with('{'));
+    assert!(content.contains("\"meta\""));
+    std::fs::remove_file(&tmp).ok();
+}
+
+// ── Format unknown returns error ──
+
+#[test]
+fn format_unknown_returns_error() {
+    let (_, stderr, code) = run_src(&["--format", "xml"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("Unknown format"));
+}
+
+// ── Limit on various modes ──
+
+#[test]
+fn limit_on_symbols() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--limit", "1", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"symbols\""));
+}
+
+#[test]
+fn limit_on_graph() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--graph", "--limit", "2", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"graph\""));
+}
+
+#[test]
+fn limit_on_count() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-f", "fn", "-c", "--limit", "1"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("filesMatched: 1"));
+}
+
+// ── Combined new flags ──
+
+#[test]
+fn combined_limit_json() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.*", "--limit", "3", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.starts_with('{'));
+    assert!(stdout.contains("\"filesMatched\":3"));
+}
+
+#[test]
+fn help_includes_new_flags() {
+    let (stdout, _, _) = run_src(&["--help"]);
+    assert!(stdout.contains("--limit"));
+    assert!(stdout.contains("--format"));
+    assert!(stdout.contains("--json"));
+    assert!(stdout.contains("--output"));
 }

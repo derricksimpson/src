@@ -127,12 +127,13 @@ impl LangSymbols for GoImports {
     }
 
     fn extract_symbols(&self, content: &str) -> Vec<SymbolInfo> {
+        let all_lines: Vec<&str> = content.lines().collect();
         let mut symbols = Vec::new();
         let mut in_const_block = false;
         let mut in_var_block = false;
         let mut paren_depth: i32 = 0;
 
-        for (line_idx, line) in content.lines().enumerate() {
+        for (line_idx, line) in all_lines.iter().enumerate() {
             let trimmed = line.trim();
             let line_num = line_idx + 1;
 
@@ -165,6 +166,7 @@ impl LangSymbols for GoImports {
                         kind,
                         name: name.to_owned(),
                         line: line_num,
+                        end_line: line_num,
                         visibility: vis,
                         parent: None,
                         signature: trimmed.to_owned(),
@@ -174,14 +176,16 @@ impl LangSymbols for GoImports {
             }
 
             if trimmed.starts_with("func ") {
-                if let Some(sym) = parse_go_func(trimmed, line_num) {
+                if let Some(mut sym) = parse_go_func(trimmed, line_num) {
+                    sym.end_line = find_go_brace_end(&all_lines, line_idx);
                     symbols.push(sym);
                 }
                 continue;
             }
 
             if trimmed.starts_with("type ") {
-                if let Some(sym) = parse_go_type(trimmed, line_num) {
+                if let Some(mut sym) = parse_go_type(trimmed, line_num) {
+                    sym.end_line = find_go_brace_end(&all_lines, line_idx);
                     symbols.push(sym);
                 }
                 continue;
@@ -207,6 +211,7 @@ impl LangSymbols for GoImports {
                         kind: "const",
                         name: name.to_owned(),
                         line: line_num,
+                        end_line: line_num,
                         visibility: vis,
                         parent: None,
                         signature: make_go_signature(trimmed),
@@ -223,6 +228,7 @@ impl LangSymbols for GoImports {
                         kind: "var",
                         name: name.to_owned(),
                         line: line_num,
+                        end_line: line_num,
                         visibility: vis,
                         parent: None,
                         signature: make_go_signature(trimmed),
@@ -233,6 +239,25 @@ impl LangSymbols for GoImports {
 
         symbols
     }
+}
+
+fn find_go_brace_end(lines: &[&str], start_idx: usize) -> usize {
+    let mut depth: i32 = 0;
+    for (i, line) in lines[start_idx..].iter().enumerate() {
+        for c in line.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth <= 0 {
+                        return start_idx + i + 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    start_idx + 1
 }
 
 fn parse_go_func(trimmed: &str, line_num: usize) -> Option<SymbolInfo> {
@@ -253,6 +278,7 @@ fn parse_go_func(trimmed: &str, line_num: usize) -> Option<SymbolInfo> {
             kind: "method",
             name: name.to_owned(),
             line: line_num,
+            end_line: 0,
             visibility: vis,
             parent: receiver_type,
             signature: make_go_signature(trimmed),
@@ -268,6 +294,7 @@ fn parse_go_func(trimmed: &str, line_num: usize) -> Option<SymbolInfo> {
             kind: "fn",
             name: name.to_owned(),
             line: line_num,
+            end_line: 0,
             visibility: vis,
             parent: None,
             signature: make_go_signature(trimmed),
@@ -308,6 +335,7 @@ fn parse_go_type(trimmed: &str, line_num: usize) -> Option<SymbolInfo> {
         kind,
         name: name.to_owned(),
         line: line_num,
+        end_line: 0,
         visibility: vis,
         parent: None,
         signature: make_go_signature(trimmed),
@@ -581,5 +609,282 @@ var debug bool
         assert!(syms.iter().any(|s| s.kind == "method" && s.name == "Start"));
         assert!(syms.iter().any(|s| s.kind == "const" && s.name == "MaxConns"));
         assert!(syms.iter().any(|s| s.kind == "var" && s.name == "debug"));
+    }
+
+    // ── Deep: Realistic full-file simulation ──
+
+    #[test]
+    fn realistic_http_server() {
+        let content = r#"package server
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"sync"
+	"time"
+)
+
+const (
+	DefaultPort    = 8080
+	DefaultTimeout = 30
+	MaxHeaderBytes = 1 << 20
+)
+
+var (
+	mu       sync.Mutex
+	instance *HTTPServer
+)
+
+type Config struct {
+	Host         string
+	Port         int
+	ReadTimeout  time.Duration
+	WriteTimeout time.Duration
+}
+
+type HTTPServer struct {
+	config Config
+	server *http.Server
+	router *http.ServeMux
+}
+
+type Middleware interface {
+	Wrap(next http.Handler) http.Handler
+}
+
+type Route struct {
+	Method  string
+	Path    string
+	Handler http.HandlerFunc
+}
+
+func NewHTTPServer(config Config) *HTTPServer {
+	return &HTTPServer{
+		config: config,
+		router: http.NewServeMux(),
+	}
+}
+
+func (s *HTTPServer) Start() error {
+	s.server = &http.Server{
+		Addr:         fmt.Sprintf("%s:%d", s.config.Host, s.config.Port),
+		Handler:      s.router,
+		ReadTimeout:  s.config.ReadTimeout,
+		WriteTimeout: s.config.WriteTimeout,
+	}
+	return s.server.ListenAndServe()
+}
+
+func (s *HTTPServer) Stop(ctx context.Context) error {
+	return s.server.Shutdown(ctx)
+}
+
+func (s *HTTPServer) AddRoute(method, path string, handler http.HandlerFunc) {
+	s.router.HandleFunc(path, handler)
+}
+
+func (s *HTTPServer) Use(mw Middleware) {
+}
+
+func healthCheck(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprint(w, "ok")
+}
+
+func createRouter() *http.ServeMux {
+	mux := http.NewServeMux()
+	return mux
+}
+
+type ResponseWriter interface {
+	Write(data []byte) (int, error)
+	SetHeader(key, value string)
+	StatusCode() int
+}
+
+type logLevel int
+
+const (
+	logDebug logLevel = iota
+	logInfo
+	logWarn
+	logError
+)
+"#;
+        let syms = extract_syms(content);
+
+        let consts: Vec<_> = syms.iter().filter(|s| s.kind == "const").collect();
+        assert!(consts.iter().any(|s| s.name == "DefaultPort" && s.visibility == Some("pub")));
+        assert!(consts.iter().any(|s| s.name == "DefaultTimeout" && s.visibility == Some("pub")));
+        assert!(consts.iter().any(|s| s.name == "MaxHeaderBytes" && s.visibility == Some("pub")));
+        assert!(consts.iter().any(|s| s.name == "logDebug" && s.visibility.is_none()));
+        assert!(consts.iter().any(|s| s.name == "logInfo"));
+        assert!(consts.iter().any(|s| s.name == "logWarn"));
+        assert!(consts.iter().any(|s| s.name == "logError"));
+
+        let vars: Vec<_> = syms.iter().filter(|s| s.kind == "var").collect();
+        assert!(vars.iter().any(|s| s.name == "mu"));
+        assert!(vars.iter().any(|s| s.name == "instance"));
+
+        let structs: Vec<_> = syms.iter().filter(|s| s.kind == "struct").collect();
+        assert!(structs.iter().any(|s| s.name == "Config" && s.visibility == Some("pub")));
+        assert!(structs.iter().any(|s| s.name == "HTTPServer" && s.visibility == Some("pub")));
+        assert!(structs.iter().any(|s| s.name == "Route" && s.visibility == Some("pub")));
+
+        let ifaces: Vec<_> = syms.iter().filter(|s| s.kind == "interface").collect();
+        assert!(ifaces.iter().any(|s| s.name == "Middleware" && s.visibility == Some("pub")));
+        assert!(ifaces.iter().any(|s| s.name == "ResponseWriter" && s.visibility == Some("pub")));
+
+        let fns: Vec<_> = syms.iter().filter(|s| s.kind == "fn").collect();
+        assert!(fns.iter().any(|s| s.name == "NewHTTPServer" && s.visibility == Some("pub")));
+        assert!(fns.iter().any(|s| s.name == "healthCheck" && s.visibility.is_none()));
+        assert!(fns.iter().any(|s| s.name == "createRouter" && s.visibility.is_none()));
+
+        let methods: Vec<_> = syms.iter().filter(|s| s.kind == "method").collect();
+        assert!(methods.iter().any(|s| s.name == "Start" && s.parent == Some("HTTPServer".to_owned())));
+        assert!(methods.iter().any(|s| s.name == "Stop" && s.parent == Some("HTTPServer".to_owned())));
+        assert!(methods.iter().any(|s| s.name == "AddRoute" && s.parent == Some("HTTPServer".to_owned())));
+        assert!(methods.iter().any(|s| s.name == "Use" && s.parent == Some("HTTPServer".to_owned())));
+
+        let types: Vec<_> = syms.iter().filter(|s| s.kind == "type").collect();
+        assert!(types.iter().any(|s| s.name == "logLevel"));
+    }
+
+    #[test]
+    fn multi_return_function() {
+        let content = "func divide(a, b float64) (float64, error) {\n  return a / b, nil\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "fn");
+        assert_eq!(syms[0].name, "divide");
+    }
+
+    #[test]
+    fn named_return_values() {
+        let content = "func parseConfig(raw string) (config Config, err error) {\n  return\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].name, "parseConfig");
+    }
+
+    #[test]
+    fn init_function() {
+        let content = "func init() {\n  log.Println(\"initializing\")\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "fn");
+        assert_eq!(syms[0].name, "init");
+        assert_eq!(syms[0].visibility, None);
+    }
+
+    #[test]
+    fn variadic_function() {
+        let content = "func Sum(numbers ...int) int {\n  return 0\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].name, "Sum");
+        assert_eq!(syms[0].visibility, Some("pub"));
+    }
+
+    #[test]
+    fn pointer_and_value_receivers() {
+        let content = r#"type Counter struct {
+    count int
+}
+
+func (c Counter) GetCount() int {
+    return c.count
+}
+
+func (c *Counter) Increment() {
+    c.count++
+}
+
+func (c *Counter) Reset() {
+    c.count = 0
+}
+"#;
+        let syms = extract_syms(content);
+        let methods: Vec<_> = syms.iter().filter(|s| s.kind == "method").collect();
+        assert_eq!(methods.len(), 3);
+        for m in &methods {
+            assert_eq!(m.parent, Some("Counter".to_owned()));
+        }
+    }
+
+    #[test]
+    fn empty_interface() {
+        let content = "type Any interface{}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "interface");
+        assert_eq!(syms[0].name, "Any");
+    }
+
+    #[test]
+    fn func_type_alias() {
+        let content = "type HandlerFunc func(http.ResponseWriter, *http.Request)\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "type");
+        assert_eq!(syms[0].name, "HandlerFunc");
+    }
+
+    #[test]
+    fn type_with_embedded_struct() {
+        let content = "type EnhancedServer struct {\n  Server\n  Logger\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "struct");
+        assert_eq!(syms[0].name, "EnhancedServer");
+    }
+
+    #[test]
+    fn const_block_with_iota() {
+        let content = "const (\n    Sunday Weekday = iota\n    Monday\n    Tuesday\n    Wednesday\n    Thursday\n    Friday\n    Saturday\n)\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 7);
+        assert!(syms.iter().all(|s| s.kind == "const"));
+        assert_eq!(syms[0].name, "Sunday");
+        assert_eq!(syms[6].name, "Saturday");
+    }
+
+    #[test]
+    fn go_line_numbers_accurate() {
+        let content = "package main\n\n// comment\n\nfunc first() {\n}\n\ntype Second struct {\n}\n";
+        let syms = extract_syms(content);
+        let first = syms.iter().find(|s| s.name == "first").unwrap();
+        assert_eq!(first.line, 5);
+        let second = syms.iter().find(|s| s.name == "Second").unwrap();
+        assert_eq!(second.line, 8);
+    }
+
+    #[test]
+    fn blank_import() {
+        let content = "import (\n  _ \"net/http/pprof\"\n  . \"fmt\"\n)\n";
+        let imports = parse_go_imports(content);
+        assert_eq!(imports.len(), 2);
+        assert!(imports.contains(&"net/http/pprof".to_owned()));
+        assert!(imports.contains(&"fmt".to_owned()));
+    }
+
+    #[test]
+    fn method_signature_includes_receiver() {
+        let content = "func (s *Server) Start(ctx context.Context) error {\n  return nil\n}\n";
+        let syms = extract_syms(content);
+        assert!(syms[0].signature.starts_with("func (s *Server) Start"));
+        assert!(syms[0].signature.contains("context.Context"));
+    }
+
+    #[test]
+    fn var_with_function_type() {
+        let content = "var DefaultErrorHandler func(err error)\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms[0].kind, "var");
+        assert_eq!(syms[0].name, "DefaultErrorHandler");
+        assert_eq!(syms[0].visibility, Some("pub"));
+    }
+
+    #[test]
+    fn multiple_import_statements() {
+        let content = "import \"fmt\"\nimport \"os\"\nimport (\n  \"log\"\n  \"net/http\"\n)\n";
+        let imports = parse_go_imports(content);
+        assert_eq!(imports.len(), 4);
     }
 }

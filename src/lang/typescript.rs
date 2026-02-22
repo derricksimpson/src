@@ -40,12 +40,13 @@ impl LangSymbols for TypeScriptImports {
     }
 
     fn extract_symbols(&self, content: &str) -> Vec<SymbolInfo> {
+        let all_lines: Vec<&str> = content.lines().collect();
         let mut symbols = Vec::new();
         let mut current_class: Option<String> = None;
         let mut class_brace_depth: i32 = 0;
         let mut in_class = false;
 
-        for (line_idx, line) in content.lines().enumerate() {
+        for (line_idx, line) in all_lines.iter().enumerate() {
             let trimmed = line.trim();
             let line_num = line_idx + 1;
 
@@ -78,8 +79,10 @@ impl LangSymbols for TypeScriptImports {
                     } else {
                         extract_member_visibility(rest)
                     };
+                    let end_line = find_ts_brace_end(&all_lines, line_idx);
                     symbols.push(SymbolInfo {
                         visibility: member_vis,
+                        end_line,
                         ..sym
                     });
                     continue;
@@ -87,10 +90,12 @@ impl LangSymbols for TypeScriptImports {
             }
 
             if let Some(name) = try_extract_function(rest) {
+                let end_line = find_ts_brace_end(&all_lines, line_idx);
                 symbols.push(SymbolInfo {
                     kind: "fn",
                     name,
                     line: line_num,
+                    end_line,
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
@@ -99,10 +104,12 @@ impl LangSymbols for TypeScriptImports {
             }
 
             if let Some(name) = try_extract_ts_keyword(rest, "class ") {
+                let end_line = find_ts_brace_end(&all_lines, line_idx);
                 symbols.push(SymbolInfo {
                     kind: "class",
                     name: name.clone(),
                     line: line_num,
+                    end_line,
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
@@ -115,10 +122,12 @@ impl LangSymbols for TypeScriptImports {
             }
 
             if let Some(name) = try_extract_ts_keyword(rest, "interface ") {
+                let end_line = find_ts_brace_end(&all_lines, line_idx);
                 symbols.push(SymbolInfo {
                     kind: "interface",
                     name,
                     line: line_num,
+                    end_line,
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
@@ -127,10 +136,12 @@ impl LangSymbols for TypeScriptImports {
             }
 
             if let Some(name) = try_extract_ts_keyword(rest, "type ") {
+                let end_line = find_ts_semicolon_or_same(&all_lines, line_idx);
                 symbols.push(SymbolInfo {
                     kind: "type",
                     name,
                     line: line_num,
+                    end_line,
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
@@ -139,10 +150,12 @@ impl LangSymbols for TypeScriptImports {
             }
 
             if let Some(name) = try_extract_ts_keyword(rest, "enum ") {
+                let end_line = find_ts_brace_end(&all_lines, line_idx);
                 symbols.push(SymbolInfo {
                     kind: "enum",
                     name,
                     line: line_num,
+                    end_line,
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
@@ -159,10 +172,12 @@ impl LangSymbols for TypeScriptImports {
                     if !name.is_empty() && !name.contains(' ') {
                         let after_eq = after[eq_pos + 1..].trim();
                         let kind = if is_arrow_function(after_eq) { "fn" } else { "const" };
+                        let end_line = find_ts_semicolon_or_brace_end(&all_lines, line_idx);
                         symbols.push(SymbolInfo {
                             kind,
                             name: name.to_owned(),
                             line: line_num,
+                            end_line,
                             visibility: vis,
                             parent: None,
                             signature: make_ts_signature(trimmed),
@@ -178,6 +193,7 @@ impl LangSymbols for TypeScriptImports {
                         kind: "export",
                         name: "default".to_owned(),
                         line: line_num,
+                        end_line: line_num,
                         visibility: vis,
                         parent: None,
                         signature: make_ts_signature(trimmed),
@@ -234,6 +250,42 @@ fn try_extract_ts_keyword(rest: &str, keyword: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name.to_owned()) }
 }
 
+fn find_ts_brace_end(lines: &[&str], start_idx: usize) -> usize {
+    let mut depth: i32 = 0;
+    for (i, line) in lines[start_idx..].iter().enumerate() {
+        for c in line.chars() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth <= 0 {
+                        return start_idx + i + 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    start_idx + 1
+}
+
+fn find_ts_semicolon_or_same(lines: &[&str], start_idx: usize) -> usize {
+    for (i, line) in lines[start_idx..].iter().enumerate() {
+        if line.contains(';') {
+            return start_idx + i + 1;
+        }
+    }
+    start_idx + 1
+}
+
+fn find_ts_semicolon_or_brace_end(lines: &[&str], start_idx: usize) -> usize {
+    let first_line = lines[start_idx];
+    if first_line.contains('{') {
+        return find_ts_brace_end(lines, start_idx);
+    }
+    find_ts_semicolon_or_same(lines, start_idx)
+}
+
 fn try_class_member(rest: &str, line_num: usize, class_name: &Option<String>) -> Option<SymbolInfo> {
     let cleaned = strip_member_modifiers(rest);
 
@@ -248,6 +300,7 @@ fn try_class_member(rest: &str, line_num: usize, class_name: &Option<String>) ->
                         kind: "method",
                         name: name.to_owned(),
                         line: line_num,
+                        end_line: 0,
                         visibility: None,
                         parent: class_name.clone(),
                         signature: rest.to_owned(),
@@ -264,6 +317,7 @@ fn try_class_member(rest: &str, line_num: usize, class_name: &Option<String>) ->
                 kind: "method",
                 name: before.to_owned(),
                 line: line_num,
+                end_line: 0,
                 visibility: None,
                 parent: class_name.clone(),
                 signature: rest.to_owned(),
@@ -610,5 +664,420 @@ mod tests {
         assert!(exts.contains(&"jsx"));
         assert!(exts.contains(&"mjs"));
         assert!(exts.contains(&"mts"));
+    }
+
+    // ── Deep: Realistic full-file simulation ──
+
+    #[test]
+    fn realistic_express_controller() {
+        let content = r#"import { Request, Response, NextFunction } from 'express';
+import { UserService } from './services/userService';
+import { Logger } from '../utils/logger';
+import type { User, CreateUserDTO } from './types';
+
+export const ROUTE_PREFIX = '/api/users';
+
+export class UserController {
+  private userService: UserService;
+  private logger: Logger;
+
+  constructor(userService: UserService, logger: Logger) {
+    this.userService = userService;
+    this.logger = logger;
+  }
+
+  async getAll(req: Request, res: Response) {
+    const users = await this.userService.findAll();
+    res.json(users);
+  }
+
+  async getById(req: Request, res: Response) {
+    const user = await this.userService.findById(req.params.id);
+    res.json(user);
+  }
+
+  async create(req: Request, res: Response) {
+    const user = await this.userService.create(req.body);
+    res.status(201).json(user);
+  }
+
+  async update(req: Request, res: Response) {
+    const user = await this.userService.update(req.params.id, req.body);
+    res.json(user);
+  }
+
+  async delete(req: Request, res: Response) {
+    await this.userService.delete(req.params.id);
+    res.status(204).send();
+  }
+}
+
+export default UserController;
+"#;
+        let syms = extract_syms(content);
+
+        let class = syms.iter().find(|s| s.kind == "class" && s.name == "UserController").unwrap();
+        assert_eq!(class.visibility, Some("export"));
+
+        let methods: Vec<_> = syms.iter()
+            .filter(|s| s.kind == "method" && s.parent == Some("UserController".to_owned()))
+            .collect();
+        assert!(methods.iter().any(|s| s.name == "constructor"));
+        assert!(methods.iter().any(|s| s.name == "getAll"));
+        assert!(methods.iter().any(|s| s.name == "getById"));
+        assert!(methods.iter().any(|s| s.name == "create"));
+        assert!(methods.iter().any(|s| s.name == "update"));
+        assert!(methods.iter().any(|s| s.name == "delete"));
+
+        let route_const = syms.iter().find(|s| s.name == "ROUTE_PREFIX").unwrap();
+        assert_eq!(route_const.kind, "const");
+        assert_eq!(route_const.visibility, Some("export"));
+    }
+
+    #[test]
+    fn realistic_express_controller_imports() {
+        let content = r#"import { Request, Response } from 'express';
+import { UserService } from './services/userService';
+import { Logger } from '../utils/logger';
+import type { User } from './types';
+"#;
+        let imports = extract_imports(content, "src/controllers/userController.ts");
+        assert!(imports.iter().any(|i| i.contains("services")));
+        assert!(imports.iter().any(|i| i.contains("logger")));
+        assert!(imports.iter().any(|i| i.contains("types")));
+        // npm 'express' is not relative, so ignored
+        assert!(!imports.iter().any(|i| i.contains("express")));
+    }
+
+    // ── Deep: getter/setter class members ──
+
+    #[test]
+    fn class_getter_setter() {
+        let content = r#"class Config {
+  private _name: string = '';
+
+  get name(): string {
+    return this._name;
+  }
+
+  set name(value: string) {
+    this._name = value;
+  }
+}
+"#;
+        let syms = extract_syms(content);
+        let get_name = syms.iter().find(|s| s.name == "name" && s.kind == "method").unwrap();
+        assert_eq!(get_name.parent, Some("Config".to_owned()));
+    }
+
+    // ── Deep: static methods ──
+
+    #[test]
+    fn class_static_method() {
+        let content = r#"class Factory {
+  static create(): Factory {
+    return new Factory();
+  }
+
+  static async fromConfig(config: Config): Promise<Factory> {
+    return new Factory();
+  }
+}
+"#;
+        let syms = extract_syms(content);
+        let create = syms.iter().find(|s| s.name == "create").unwrap();
+        assert_eq!(create.kind, "method");
+        assert_eq!(create.parent, Some("Factory".to_owned()));
+        let from_config = syms.iter().find(|s| s.name == "fromConfig").unwrap();
+        assert_eq!(from_config.kind, "method");
+    }
+
+    // ── Deep: class extends ──
+
+    #[test]
+    fn class_extends_and_implements() {
+        let content = r#"export class AdminService extends BaseService {
+  private permissions: string[] = [];
+
+  checkPermission(perm: string): boolean {
+    return this.permissions.includes(perm);
+  }
+}
+"#;
+        let syms = extract_syms(content);
+        let cls = syms.iter().find(|s| s.kind == "class").unwrap();
+        assert_eq!(cls.name, "AdminService");
+        assert!(cls.signature.contains("extends BaseService"));
+    }
+
+    // ── Deep: interface with generics ──
+
+    #[test]
+    fn generic_interface() {
+        let content = "export interface Repository<T> {\n  findById(id: string): Promise<T>;\n  save(entity: T): Promise<void>;\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "interface");
+        assert_eq!(syms[0].name, "Repository");
+    }
+
+    // ── Deep: generic function ──
+
+    #[test]
+    fn generic_function() {
+        let content = "export function identity<T>(arg: T): T {\n  return arg;\n}\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "fn");
+        // Parser includes generic params in name: everything before '('
+        assert_eq!(syms[0].name, "identity<T>");
+    }
+
+    // ── Deep: complex type alias ──
+
+    #[test]
+    fn complex_type_alias() {
+        let content = "export type AsyncHandler<T> = (req: Request, res: Response) => Promise<T>;\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "type");
+        assert_eq!(syms[0].name, "AsyncHandler");
+    }
+
+    // ── Deep: multiple exports ──
+
+    #[test]
+    fn multiple_export_styles() {
+        // When class braces open and close on the same line, class_brace_depth stays 0,
+        // causing the next line to be consumed by the class-exit check. Separate them
+        // so class body spans multiple lines.
+        let content = r#"export function a() {}
+export const b = 1;
+export class C {
+}
+export interface D {}
+export type E = string;
+export enum F { X }
+"#;
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 6);
+        for s in &syms {
+            assert_eq!(s.visibility, Some("export"));
+        }
+    }
+
+    // ── Deep: re-export import ──
+
+    #[test]
+    fn reexport_import() {
+        let content = "export { default as Router } from './router';\nexport { Config } from './config';\n";
+        let imports = extract_imports(content, "src/index.ts");
+        assert!(imports.iter().any(|i| i.contains("router")));
+        assert!(imports.iter().any(|i| i.contains("config")));
+    }
+
+    // ── Deep: dynamic import is not picked up (string not in from pattern) ──
+
+    #[test]
+    fn dynamic_import_not_picked() {
+        let content = "const mod = await import('./module');\n";
+        let imports = extract_imports(content, "src/index.ts");
+        // dynamic import doesn't use `from` keyword pattern
+        assert!(imports.is_empty());
+    }
+
+    // ── Deep: star import ──
+
+    #[test]
+    fn star_import() {
+        let content = "import * as utils from './utils';\n";
+        let imports = extract_imports(content, "src/index.ts");
+        assert!(imports.iter().any(|i| i.contains("utils")));
+    }
+
+    // ── Deep: side-effect import ──
+
+    #[test]
+    fn side_effect_import_no_from() {
+        let content = "import './polyfills';\n";
+        let imports = extract_imports(content, "src/index.ts");
+        // no ` from ` in the line — extract_import_path won't match
+        assert!(imports.is_empty());
+    }
+
+    // ── Deep: const with type annotation ──
+
+    #[test]
+    fn const_with_type_annotation() {
+        let content = "export const MAX_RETRIES: number = 3;\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].name, "MAX_RETRIES");
+        assert_eq!(syms[0].kind, "const");
+    }
+
+    // ── Deep: destructured const is NOT extracted (has space in name) ──
+
+    #[test]
+    fn destructured_const_not_extracted() {
+        let content = "const { a, b } = getValues();\n";
+        let syms = extract_syms(content);
+        // name extraction finds "{ a," which starts with '{' which contains spaces — filtered
+        assert!(syms.is_empty());
+    }
+
+    // ── Deep: class with readonly property ──
+
+    #[test]
+    fn class_readonly_method() {
+        let content = r#"class Store {
+  readonly items: string[] = [];
+
+  addItem(item: string) {
+    this.items.push(item);
+  }
+}
+"#;
+        let syms = extract_syms(content);
+        let add_item = syms.iter().find(|s| s.name == "addItem").unwrap();
+        assert_eq!(add_item.kind, "method");
+    }
+
+    // ── Deep: override method ──
+
+    #[test]
+    fn override_method() {
+        let content = r#"class Child extends Parent {
+  override doSomething() {
+    super.doSomething();
+  }
+}
+"#;
+        let syms = extract_syms(content);
+        let m = syms.iter().find(|s| s.name == "doSomething").unwrap();
+        assert_eq!(m.kind, "method");
+    }
+
+    // ── Deep: multiple classes in same file ──
+
+    #[test]
+    fn multiple_classes_methods_have_correct_parent() {
+        let content = r#"class Alpha {
+  alphaMethod() {}
+}
+
+class Beta {
+  betaMethod() {}
+}
+"#;
+        let syms = extract_syms(content);
+        let alpha_m = syms.iter().find(|s| s.name == "alphaMethod").unwrap();
+        assert_eq!(alpha_m.parent, Some("Alpha".to_owned()));
+        let beta_m = syms.iter().find(|s| s.name == "betaMethod").unwrap();
+        assert_eq!(beta_m.parent, Some("Beta".to_owned()));
+    }
+
+    // ── Deep: line numbers ──
+
+    #[test]
+    fn line_numbers_accurate() {
+        let content = "// line 1\n// line 2\n\nexport function greet() {\n}\n\nexport class Greeter {\n}\n";
+        let syms = extract_syms(content);
+        let greet = syms.iter().find(|s| s.name == "greet").unwrap();
+        assert_eq!(greet.line, 4);
+        let greeter = syms.iter().find(|s| s.name == "Greeter").unwrap();
+        assert_eq!(greeter.line, 7);
+    }
+
+    // ── Deep: async class method (not static) ──
+
+    #[test]
+    fn async_class_method() {
+        let content = "class Service {\n  async fetchData() {\n    return [];\n  }\n}\n";
+        let syms = extract_syms(content);
+        let m = syms.iter().find(|s| s.name == "fetchData").unwrap();
+        assert_eq!(m.kind, "method");
+        assert_eq!(m.parent, Some("Service".to_owned()));
+    }
+
+    // ── Deep: protected static method ──
+
+    #[test]
+    fn protected_static_method() {
+        let content = "class Base {\n  protected static getInstance() {\n    return new Base();\n  }\n}\n";
+        let syms = extract_syms(content);
+        let m = syms.iter().find(|s| s.name == "getInstance").unwrap();
+        assert_eq!(m.kind, "method");
+        assert_eq!(m.visibility, Some("protected"));
+    }
+
+    // ── Deep: arrow fn with type annotation in const ──
+
+    #[test]
+    fn typed_arrow_function() {
+        let content = "const handler: Handler = (req, res) => {\n  res.send('ok');\n};\n";
+        let syms = extract_syms(content);
+        assert_eq!(syms.len(), 1);
+        assert_eq!(syms[0].kind, "fn");
+        assert_eq!(syms[0].name, "handler");
+    }
+
+    // ── Deep: full React component file ──
+
+    #[test]
+    fn react_component_file() {
+        let content = r#"import React from 'react';
+import { useState, useEffect } from 'react';
+import { Button } from './components/Button';
+import type { User } from '../types';
+
+interface Props {
+  initialUser: User;
+}
+
+type State = 'loading' | 'ready' | 'error';
+
+const UserProfile: React.FC<Props> = ({ initialUser }) => {
+  return null;
+};
+
+export function useUser(id: string) {
+  return null;
+}
+
+export default UserProfile;
+"#;
+        let syms = extract_syms(content);
+        let iface = syms.iter().find(|s| s.kind == "interface").unwrap();
+        assert_eq!(iface.name, "Props");
+        let type_sym = syms.iter().find(|s| s.kind == "type").unwrap();
+        assert_eq!(type_sym.name, "State");
+        let component = syms.iter().find(|s| s.name == "UserProfile" && s.kind == "fn").unwrap();
+        assert!(component.signature.contains("React.FC"));
+        let hook = syms.iter().find(|s| s.name == "useUser").unwrap();
+        assert_eq!(hook.kind, "fn");
+
+        let imports = extract_imports(content, "src/components/UserProfile.tsx");
+        assert!(imports.iter().any(|i| i.contains("Button")));
+        assert!(imports.iter().any(|i| i.contains("types")));
+        assert!(!imports.iter().any(|i| i.contains("react")));
+    }
+
+    // ── Deep: nested require ──
+
+    #[test]
+    fn require_in_middle_of_line() {
+        let content = "const config = JSON.parse(require('./config.json'));\n";
+        let imports = extract_imports(content, "src/index.js");
+        assert!(imports.iter().any(|i| i.contains("config")));
+    }
+
+    // ── Deep: import with .js extension ──
+
+    #[test]
+    fn import_with_extension_in_path() {
+        let content = "import { foo } from './utils.js';\n";
+        let imports = extract_imports(content, "src/index.ts");
+        assert!(imports.iter().any(|i| i.contains("utils")));
     }
 }

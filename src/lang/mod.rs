@@ -15,6 +15,7 @@ pub struct SymbolInfo {
     pub kind: &'static str,
     pub name: String,
     pub line: usize,
+    pub end_line: usize,
     pub visibility: Option<&'static str>,
     pub parent: Option<String>,
     pub signature: String,
