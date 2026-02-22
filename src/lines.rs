@@ -1,12 +1,10 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use memmap2::Mmap;
 use rayon::prelude::*;
 
+use crate::file_reader;
 use crate::models::FileEntry;
 use crate::path_helper;
 use crate::searcher;
@@ -77,9 +75,6 @@ pub fn extract_lines(
     results
 }
 
-const MMAP_THRESHOLD: u64 = 64 * 1024;
-const BINARY_CHECK_SIZE: usize = 8192;
-
 fn extract_file(
     root: &Path,
     rel_path: &str,
@@ -88,23 +83,7 @@ fn extract_file(
 ) -> FileEntry {
     let full_path = root.join(rel_path);
 
-    let metadata = match std::fs::metadata(&full_path) {
-        Ok(m) => m,
-        Err(_) => return FileEntry {
-            path: rel_path.to_owned(),
-            contents: None,
-            error: Some(format!("File not found: {}", rel_path)),
-            chunks: None,
-        },
-    };
-
-    let content = if metadata.len() >= MMAP_THRESHOLD {
-        read_file_mmap(&full_path)
-    } else {
-        read_file_buffered(&full_path)
-    };
-
-    let content = match content {
+    let content = match file_reader::read_file(&full_path) {
         Ok(Some(c)) => c,
         Ok(None) => return FileEntry {
             path: rel_path.to_owned(),
@@ -172,36 +151,6 @@ fn merge_and_sort_ranges(ranges: &[(usize, usize)], line_count: usize) -> Vec<(u
         merged.push((s, e));
     }
     merged
-}
-
-fn read_file_mmap(path: &Path) -> Result<Option<String>, String> {
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let mmap = unsafe { Mmap::map(&file) }.map_err(|e| e.to_string())?;
-    let data = &mmap[..];
-    if is_binary(data) {
-        return Ok(None);
-    }
-    let s = std::str::from_utf8(data).map_err(|_| "Not valid UTF-8".to_string())?;
-    Ok(Some(s.to_owned()))
-}
-
-fn read_file_buffered(path: &Path) -> Result<Option<String>, String> {
-    let file = File::open(path).map_err(|e| e.to_string())?;
-    let mut reader = BufReader::with_capacity(64 * 1024, file);
-    let mut check_buf = [0u8; BINARY_CHECK_SIZE];
-    let n = reader.read(&mut check_buf).map_err(|e| e.to_string())?;
-    if is_binary(&check_buf[..n]) {
-        return Ok(None);
-    }
-    let mut all = Vec::from(&check_buf[..n]);
-    reader.read_to_end(&mut all).map_err(|e| e.to_string())?;
-    let s = std::str::from_utf8(&all).map_err(|_| "Not valid UTF-8".to_string())?;
-    Ok(Some(s.to_owned()))
-}
-
-fn is_binary(data: &[u8]) -> bool {
-    let check_len = data.len().min(BINARY_CHECK_SIZE);
-    data[..check_len].contains(&0)
 }
 
 #[cfg(test)]

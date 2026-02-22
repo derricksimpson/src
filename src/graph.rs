@@ -1,10 +1,10 @@
 use std::collections::HashSet;
-use std::fs;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rayon::prelude::*;
 
+use crate::file_reader;
 use crate::lang;
 use crate::models::GraphEntry;
 use crate::path_helper;
@@ -44,8 +44,12 @@ fn process_file(
     let ext = path.extension()?.to_str()?;
     let handler = lang::get_handler(ext)?;
 
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
+    let content = match file_reader::read_file(path) {
+        Ok(Some(c)) => c,
+        Ok(None) => return Some(GraphEntry {
+            file: relative,
+            imports: Vec::new(),
+        }),
         Err(_) => return Some(GraphEntry {
             file: relative,
             imports: Vec::new(),
@@ -58,21 +62,21 @@ fn process_file(
     let mut resolved: Vec<String> = Vec::new();
     let mut seen = HashSet::new();
 
-        for candidate in &raw_imports {
-            let normalized = normalize_candidate(candidate);
-            if normalized == relative {
-                continue;
-            }
-            if normalized.ends_with('/') {
-                for pf in project_files.iter() {
-                    if pf.starts_with(&normalized) && seen.insert(pf.clone()) {
-                        resolved.push(pf.clone());
-                    }
-                }
-            } else if project_files.contains(&normalized) && seen.insert(normalized.clone()) {
-                resolved.push(normalized);
-            }
+    for candidate in &raw_imports {
+        let normalized = normalize_candidate(candidate);
+        if normalized == relative {
+            continue;
         }
+        if normalized.ends_with('/') {
+            for pf in project_files.iter() {
+                if pf.starts_with(&normalized) && seen.insert(pf.clone()) {
+                    resolved.push(pf.clone());
+                }
+            }
+        } else if project_files.contains(&normalized) && seen.insert(normalized.clone()) {
+            resolved.push(normalized);
+        }
+    }
 
     resolved.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
 

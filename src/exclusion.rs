@@ -26,19 +26,9 @@ impl ExclusionFilter {
     }
 
     pub fn is_excluded(&self, name: &str) -> bool {
-        let mut buf = [0u8; 256];
-        let lowered = ascii_lowercase(name, &mut buf);
-        self.exclusions.contains(lowered)
+        let lowered = name.to_ascii_lowercase();
+        self.exclusions.contains(lowered.as_str())
     }
-}
-
-fn ascii_lowercase<'a>(s: &str, buf: &'a mut [u8; 256]) -> &'a str {
-    let bytes = s.as_bytes();
-    let len = bytes.len().min(256);
-    for i in 0..len {
-        buf[i] = bytes[i].to_ascii_lowercase();
-    }
-    unsafe { std::str::from_utf8_unchecked(&buf[..len]) }
 }
 
 #[cfg(test)]
@@ -96,11 +86,10 @@ mod tests {
     }
 
     #[test]
-    fn ascii_lowercase_helper() {
-        let mut buf = [0u8; 256];
-        assert_eq!(ascii_lowercase("Hello", &mut buf), "hello");
-        assert_eq!(ascii_lowercase("UPPER", &mut buf), "upper");
-        assert_eq!(ascii_lowercase("lower", &mut buf), "lower");
-        assert_eq!(ascii_lowercase("MiXeD", &mut buf), "mixed");
+    fn long_directory_name_not_truncated() {
+        let long_name = "a".repeat(300);
+        let filter = ExclusionFilter::new(&[long_name.clone()], true);
+        assert!(filter.is_excluded(&long_name));
+        assert!(filter.is_excluded(&long_name.to_uppercase()));
     }
 }
