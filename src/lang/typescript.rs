@@ -1,5 +1,6 @@
 use std::path::Path;
 use super::{LangImports, LangSymbols, SymbolInfo};
+use super::common::{self, CommentTracker};
 
 pub struct TypeScriptImports;
 
@@ -45,14 +46,15 @@ impl LangSymbols for TypeScriptImports {
         let mut current_class: Option<String> = None;
         let mut class_brace_depth: i32 = 0;
         let mut in_class = false;
+        let mut comment_tracker = CommentTracker::new();
 
         for (line_idx, line) in all_lines.iter().enumerate() {
             let trimmed = line.trim();
             let line_num = line_idx + 1;
 
-            if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("*") {
+            if trimmed.is_empty() || comment_tracker.is_comment(trimmed, "//") {
                 if in_class {
-                    update_brace_depth(trimmed, &mut class_brace_depth);
+                    common::update_brace_depth(trimmed, &mut class_brace_depth);
                     if class_brace_depth <= 0 {
                         current_class = None;
                         in_class = false;
@@ -62,7 +64,7 @@ impl LangSymbols for TypeScriptImports {
             }
 
             if in_class {
-                update_brace_depth(trimmed, &mut class_brace_depth);
+                common::update_brace_depth(trimmed, &mut class_brace_depth);
                 if class_brace_depth <= 0 {
                     current_class = None;
                     in_class = false;
@@ -117,7 +119,7 @@ impl LangSymbols for TypeScriptImports {
                 current_class = Some(name);
                 in_class = true;
                 class_brace_depth = 0;
-                update_brace_depth(trimmed, &mut class_brace_depth);
+                common::update_brace_depth(trimmed, &mut class_brace_depth);
                 continue;
             }
 
@@ -251,39 +253,15 @@ fn try_extract_ts_keyword(rest: &str, keyword: &str) -> Option<String> {
 }
 
 fn find_ts_brace_end(lines: &[&str], start_idx: usize) -> usize {
-    let mut depth: i32 = 0;
-    for (i, line) in lines[start_idx..].iter().enumerate() {
-        for c in line.chars() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth <= 0 {
-                        return start_idx + i + 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    start_idx + 1
+    common::find_brace_end(lines, start_idx)
 }
 
 fn find_ts_semicolon_or_same(lines: &[&str], start_idx: usize) -> usize {
-    for (i, line) in lines[start_idx..].iter().enumerate() {
-        if line.contains(';') {
-            return start_idx + i + 1;
-        }
-    }
-    start_idx + 1
+    common::find_semicolon_or_same(lines, start_idx)
 }
 
 fn find_ts_semicolon_or_brace_end(lines: &[&str], start_idx: usize) -> usize {
-    let first_line = lines[start_idx];
-    if first_line.contains('{') {
-        return find_ts_brace_end(lines, start_idx);
-    }
-    find_ts_semicolon_or_same(lines, start_idx)
+    common::find_semicolon_or_brace_end(lines, start_idx)
 }
 
 fn try_class_member(rest: &str, line_num: usize, class_name: &Option<String>) -> Option<SymbolInfo> {
@@ -344,22 +322,8 @@ fn is_arrow_function(after_eq: &str) -> bool {
         || after_eq.starts_with("async(")
 }
 
-fn update_brace_depth(trimmed: &str, depth: &mut i32) {
-    for c in trimmed.chars() {
-        match c {
-            '{' => *depth += 1,
-            '}' => *depth -= 1,
-            _ => {}
-        }
-    }
-}
-
 fn make_ts_signature(trimmed: &str) -> String {
-    if let Some(brace_pos) = trimmed.find('{') {
-        trimmed[..=brace_pos].trim().to_owned()
-    } else {
-        trimmed.to_owned()
-    }
+    common::make_signature_brace(trimmed)
 }
 
 fn extract_import_path(line: &str) -> Option<&str> {

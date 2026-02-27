@@ -1,5 +1,6 @@
 use std::path::Path;
 use super::{LangImports, LangSymbols, SymbolInfo};
+use super::common::{self, CommentTracker};
 
 pub struct RustImports;
 
@@ -59,12 +60,13 @@ impl LangSymbols for RustImports {
         let mut current_parent: Option<String> = None;
         let mut impl_brace_depth: i32 = 0;
         let mut in_impl = false;
+        let mut comment_tracker = CommentTracker::new();
 
         for (line_idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
             let line_num = line_idx + 1;
 
-            if trimmed.is_empty() || trimmed.starts_with("//") {
+            if trimmed.is_empty() || comment_tracker.is_comment(trimmed, "//") {
                 continue;
             }
 
@@ -210,6 +212,14 @@ impl LangSymbols for RustImports {
 fn extract_visibility(trimmed: &str) -> (Option<&'static str>, &str) {
     if let Some(rest) = trimmed.strip_prefix("pub(crate) ") {
         (Some("pub"), rest)
+    } else if let Some(rest) = trimmed.strip_prefix("pub(super) ") {
+        (Some("pub"), rest)
+    } else if trimmed.starts_with("pub(in ") {
+        if let Some(close) = trimmed.find(") ") {
+            (Some("pub"), trimmed[close + 2..].trim_start())
+        } else {
+            (None, trimmed)
+        }
     } else if let Some(rest) = trimmed.strip_prefix("pub ") {
         (Some("pub"), rest)
     } else {
@@ -245,39 +255,15 @@ fn try_extract_keyword(rest: &str, keyword: &str) -> Option<String> {
 }
 
 fn find_brace_end(lines: &[&str], start_idx: usize) -> usize {
-    let mut depth: i32 = 0;
-    for (i, line) in lines[start_idx..].iter().enumerate() {
-        for c in line.chars() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth <= 0 {
-                        return start_idx + i + 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    start_idx + 1
+    common::find_brace_end(lines, start_idx)
 }
 
 fn find_semicolon_or_same(lines: &[&str], start_idx: usize) -> usize {
-    for (i, line) in lines[start_idx..].iter().enumerate() {
-        if line.contains(';') {
-            return start_idx + i + 1;
-        }
-    }
-    start_idx + 1
+    common::find_semicolon_or_same(lines, start_idx)
 }
 
 fn make_signature(trimmed: &str) -> String {
-    if let Some(brace_pos) = trimmed.find('{') {
-        trimmed[..=brace_pos].trim().to_owned()
-    } else {
-        trimmed.to_owned()
-    }
+    common::make_signature_brace(trimmed)
 }
 
 fn parse_mod_decl(rest: &str) -> Option<&str> {

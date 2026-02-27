@@ -1,5 +1,6 @@
 use std::path::Path;
 use super::{LangImports, LangSymbols, SymbolInfo};
+use super::common::{self, CommentTracker};
 
 pub struct CSharpImports;
 
@@ -38,14 +39,15 @@ impl LangSymbols for CSharpImports {
         let mut current_class: Option<String> = None;
         let mut class_brace_depth: i32 = 0;
         let mut in_class = false;
+        let mut comment_tracker = CommentTracker::new();
 
         for (line_idx, line) in all_lines.iter().enumerate() {
             let trimmed = line.trim();
             let line_num = line_idx + 1;
 
-            if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with("*") || trimmed == "{" || trimmed == "}" {
+            if trimmed.is_empty() || comment_tracker.is_comment(trimmed, "//") || trimmed == "{" || trimmed == "}" {
                 if in_class {
-                    update_brace_depth(trimmed, &mut class_brace_depth);
+                    common::update_brace_depth(trimmed, &mut class_brace_depth);
                     if class_brace_depth <= 0 {
                         current_class = None;
                         in_class = false;
@@ -55,7 +57,7 @@ impl LangSymbols for CSharpImports {
             }
 
             if in_class {
-                update_brace_depth(trimmed, &mut class_brace_depth);
+                common::update_brace_depth(trimmed, &mut class_brace_depth);
                 if class_brace_depth <= 0 {
                     current_class = None;
                     in_class = false;
@@ -95,7 +97,7 @@ impl LangSymbols for CSharpImports {
                 current_class = Some(name);
                 in_class = true;
                 class_brace_depth = 0;
-                update_brace_depth(trimmed, &mut class_brace_depth);
+                common::update_brace_depth(trimmed, &mut class_brace_depth);
                 continue;
             }
 
@@ -246,49 +248,15 @@ fn try_cs_method(rest: &str) -> Option<String> {
 }
 
 fn find_cs_brace_end(lines: &[&str], start_idx: usize) -> usize {
-    let mut depth: i32 = 0;
-    for (i, line) in lines[start_idx..].iter().enumerate() {
-        for c in line.chars() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth <= 0 {
-                        return start_idx + i + 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    start_idx + 1
+    common::find_brace_end(lines, start_idx)
 }
 
 fn find_cs_semicolon_or_same(lines: &[&str], start_idx: usize) -> usize {
-    for (i, line) in lines[start_idx..].iter().enumerate() {
-        if line.contains(';') {
-            return start_idx + i + 1;
-        }
-    }
-    start_idx + 1
-}
-
-fn update_brace_depth(trimmed: &str, depth: &mut i32) {
-    for c in trimmed.chars() {
-        match c {
-            '{' => *depth += 1,
-            '}' => *depth -= 1,
-            _ => {}
-        }
-    }
+    common::find_semicolon_or_same(lines, start_idx)
 }
 
 fn make_cs_signature(trimmed: &str) -> String {
-    if let Some(brace_pos) = trimmed.find('{') {
-        trimmed[..=brace_pos].trim().to_owned()
-    } else {
-        trimmed.to_owned()
-    }
+    common::make_signature_brace(trimmed)
 }
 
 fn extract_using_namespace(line: &str) -> Option<&str> {

@@ -1,7 +1,11 @@
+pub mod common;
 mod rust;
 mod typescript;
 mod csharp;
 mod go;
+mod java;
+mod kotlin;
+mod ruby;
 mod python;
 
 use std::path::Path;
@@ -31,6 +35,9 @@ static HANDLERS: &[&dyn LangImports] = &[
     &typescript::TypeScriptImports,
     &csharp::CSharpImports,
     &go::GoImports,
+    &java::JavaImports,
+    &kotlin::KotlinImports,
+    &ruby::RubyImports,
     &python::PythonImports,
 ];
 
@@ -39,6 +46,9 @@ static SYMBOL_HANDLERS: &[&dyn LangSymbols] = &[
     &typescript::TypeScriptImports,
     &csharp::CSharpImports,
     &go::GoImports,
+    &java::JavaImports,
+    &kotlin::KotlinImports,
+    &ruby::RubyImports,
     &python::PythonImports,
 ];
 
@@ -105,10 +115,26 @@ mod tests {
     }
 
     #[test]
+    fn get_handler_ruby() {
+        assert!(get_handler("rb").is_some());
+        assert!(get_handler("rake").is_some());
+    }
+
+    #[test]
     fn get_handler_unknown_returns_none() {
         assert!(get_handler("xyz").is_none());
         assert!(get_handler("").is_none());
-        assert!(get_handler("java").is_none());
+    }
+
+    #[test]
+    fn get_handler_java() {
+        assert!(get_handler("java").is_some());
+    }
+
+    #[test]
+    fn get_handler_kotlin() {
+        assert!(get_handler("kt").is_some());
+        assert!(get_handler("kts").is_some());
     }
 
     #[test]
@@ -144,6 +170,23 @@ mod tests {
     #[test]
     fn get_symbol_handler_python() {
         assert!(get_symbol_handler("py").is_some());
+    }
+
+    #[test]
+    fn get_symbol_handler_java() {
+        assert!(get_symbol_handler("java").is_some());
+    }
+
+    #[test]
+    fn get_symbol_handler_kotlin() {
+        assert!(get_symbol_handler("kt").is_some());
+        assert!(get_symbol_handler("kts").is_some());
+    }
+
+    #[test]
+    fn get_symbol_handler_ruby() {
+        assert!(get_symbol_handler("rb").is_some());
+        assert!(get_symbol_handler("rake").is_some());
     }
 
     #[test]

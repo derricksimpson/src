@@ -1,19 +1,30 @@
-use std::path::Path;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use super::{LangImports, LangSymbols, SymbolInfo};
+use super::common::{self, CommentTracker};
 
 pub struct GoImports;
 
-static GO_MODULE_PATH: OnceLock<Option<String>> = OnceLock::new();
+use std::sync::OnceLock;
+static GO_MODULE_CACHE: OnceLock<Mutex<HashMap<PathBuf, Option<String>>>> = OnceLock::new();
 
-fn get_module_path(file_path: &Path) -> Option<&str> {
-    GO_MODULE_PATH
-        .get_or_init(|| find_and_parse_go_mod(file_path))
-        .as_deref()
+fn get_module_path_owned(file_path: &Path) -> Option<String> {
+    let cache = GO_MODULE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let go_mod_dir = find_go_mod_dir(file_path)?;
+
+    let mut map = cache.lock().unwrap();
+    if let Some(cached) = map.get(&go_mod_dir) {
+        return cached.clone();
+    }
+
+    let result = parse_module_line(&go_mod_dir.join("go.mod"));
+    map.insert(go_mod_dir, result.clone());
+    result
 }
 
-fn find_and_parse_go_mod(file_path: &Path) -> Option<String> {
+fn find_go_mod_dir(file_path: &Path) -> Option<PathBuf> {
     let mut dir = if file_path.is_file() {
         file_path.parent()?.to_path_buf()
     } else {
@@ -21,9 +32,8 @@ fn find_and_parse_go_mod(file_path: &Path) -> Option<String> {
     };
 
     loop {
-        let go_mod = dir.join("go.mod");
-        if go_mod.is_file() {
-            return parse_module_line(&go_mod);
+        if dir.join("go.mod").is_file() {
+            return Some(dir);
         }
         if !dir.pop() {
             return None;
@@ -51,10 +61,11 @@ impl LangImports for GoImports {
     }
 
     fn extract_imports(&self, content: &str, file_path: &Path) -> Vec<String> {
-        let module_path = match get_module_path(file_path) {
+        let module_path = match get_module_path_owned(file_path) {
             Some(m) => m,
             None => return Vec::new(),
         };
+        let module_path = module_path.as_str();
 
         let raw_imports = parse_go_imports(content);
         let mut results = Vec::new();
@@ -132,12 +143,13 @@ impl LangSymbols for GoImports {
         let mut in_const_block = false;
         let mut in_var_block = false;
         let mut paren_depth: i32 = 0;
+        let mut comment_tracker = CommentTracker::new();
 
         for (line_idx, line) in all_lines.iter().enumerate() {
             let trimmed = line.trim();
             let line_num = line_idx + 1;
 
-            if trimmed.is_empty() || trimmed.starts_with("//") {
+            if trimmed.is_empty() || comment_tracker.is_comment(trimmed, "//") {
                 continue;
             }
 
@@ -242,22 +254,7 @@ impl LangSymbols for GoImports {
 }
 
 fn find_go_brace_end(lines: &[&str], start_idx: usize) -> usize {
-    let mut depth: i32 = 0;
-    for (i, line) in lines[start_idx..].iter().enumerate() {
-        for c in line.chars() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth <= 0 {
-                        return start_idx + i + 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    start_idx + 1
+    common::find_brace_end(lines, start_idx)
 }
 
 fn parse_go_func(trimmed: &str, line_num: usize) -> Option<SymbolInfo> {
@@ -364,11 +361,7 @@ fn go_visibility(name: &str) -> Option<&'static str> {
 }
 
 fn make_go_signature(trimmed: &str) -> String {
-    if let Some(brace_pos) = trimmed.find('{') {
-        trimmed[..=brace_pos].trim().to_owned()
-    } else {
-        trimmed.to_owned()
-    }
+    common::make_signature_brace(trimmed)
 }
 
 #[cfg(test)]
