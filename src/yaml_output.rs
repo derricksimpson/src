@@ -40,6 +40,16 @@ fn write_envelope_yaml(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Res
     if let Some(ref error) = envelope.error {
         write_scalar(w, "error", error, 0)?;
     }
+    if let Some(ref errors) = envelope.errors {
+        if !errors.is_empty() {
+            write!(w, "errors:\n")?;
+            for e in errors {
+                write!(w, "- ")?;
+                write_inline_string(w, e)?;
+                write!(w, "\n")?;
+            }
+        }
+    }
     if let Some(ref tree) = envelope.tree {
         write!(w, "tree:\n")?;
         write_tree_node(w, tree, 2)?;
@@ -77,6 +87,9 @@ fn write_meta(w: &mut impl Write, meta: &MetaInfo) -> io::Result<()> {
     }
     if meta.files_matched != 0 {
         write!(w, "  filesMatched: {}\n", meta.files_matched)?;
+    }
+    if meta.files_errored != 0 {
+        write!(w, "  filesErrored: {}\n", meta.files_errored)?;
     }
     if let Some(total) = meta.total_matches {
         write!(w, "  totalMatches: {}\n", total)?;
@@ -467,6 +480,17 @@ fn write_envelope_json(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Res
         write!(w, "\"error\":")?;
         write_json_string(w, error)?;
     }
+    if let Some(ref errors) = envelope.errors {
+        if !errors.is_empty() {
+            json_comma(w, &mut first)?;
+            write!(w, "\"errors\":[")?;
+            for (i, e) in errors.iter().enumerate() {
+                if i > 0 { write!(w, ",")?; }
+                write_json_string(w, e)?;
+            }
+            write!(w, "]")?;
+        }
+    }
     if let Some(ref tree) = envelope.tree {
         json_comma(w, &mut first)?;
         write!(w, "\"tree\":")?;
@@ -522,6 +546,9 @@ fn write_json_string(w: &mut impl Write, s: &str) -> io::Result<()> {
 fn write_meta_json(w: &mut impl Write, meta: &MetaInfo) -> io::Result<()> {
     write!(w, "\"meta\":{{\"elapsedMs\":{},\"timeout\":{},\"filesScanned\":{},\"filesMatched\":{}",
         meta.elapsed_ms, meta.timeout, meta.files_scanned, meta.files_matched)?;
+    if meta.files_errored != 0 {
+        write!(w, ",\"filesErrored\":{}", meta.files_errored)?;
+    }
     if let Some(total) = meta.total_matches {
         write!(w, ",\"totalMatches\":{}", total)?;
     }
@@ -683,6 +710,7 @@ mod tests {
                 timeout: false,
                 files_scanned: 10,
                 files_matched: 5,
+                files_errored: 0,
                 total_matches: None,
             }),
             ..Default::default()
@@ -702,6 +730,7 @@ mod tests {
                 timeout: true,
                 files_scanned: 5,
                 files_matched: 0,
+                files_errored: 0,
                 total_matches: None,
             }),
             ..Default::default()
@@ -998,6 +1027,7 @@ mod tests {
                 timeout: false,
                 files_scanned: 10,
                 files_matched: 5,
+                files_errored: 0,
                 total_matches: None,
             }),
             ..Default::default()

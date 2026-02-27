@@ -7,6 +7,7 @@ pub struct MetaInfo {
     pub timeout: bool,
     pub files_scanned: usize,
     pub files_matched: usize,
+    pub files_errored: usize,
     pub total_matches: Option<usize>,
 }
 
@@ -79,6 +80,7 @@ pub struct OutputEnvelope {
     pub symbols: Option<Vec<SymbolFile>>,
     pub counts: Option<Vec<CountEntry>>,
     pub stats: Option<StatsOutput>,
+    pub errors: Option<Vec<String>>,
     pub error: Option<String>,
 }
 
@@ -96,6 +98,9 @@ impl fmt::Display for MetaInfo {
         }
         if self.files_matched != 0 {
             write!(f, "  filesMatched: {}\n", self.files_matched)?;
+        }
+        if self.files_errored != 0 {
+            write!(f, "  filesErrored: {}\n", self.files_errored)?;
         }
         if let Some(total) = self.total_matches {
             write!(f, "  totalMatches: {}\n", total)?;
@@ -115,6 +120,7 @@ mod tests {
             timeout: false,
             files_scanned: 10,
             files_matched: 5,
+            files_errored: 0,
             total_matches: None,
         };
         let output = format!("{}", meta);
@@ -133,6 +139,7 @@ mod tests {
             timeout: true,
             files_scanned: 0,
             files_matched: 0,
+            files_errored: 0,
             total_matches: None,
         };
         let output = format!("{}", meta);
@@ -148,6 +155,7 @@ mod tests {
             timeout: false,
             files_scanned: 20,
             files_matched: 3,
+            files_errored: 0,
             total_matches: Some(15),
         };
         let output = format!("{}", meta);
@@ -161,6 +169,7 @@ mod tests {
             timeout: false,
             files_scanned: 1,
             files_matched: 1,
+            files_errored: 0,
             total_matches: None,
         };
         let output = format!("{}", meta);

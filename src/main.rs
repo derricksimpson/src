@@ -75,6 +75,7 @@ fn make_meta(elapsed: u128, timed_out: bool, scanned: usize, matched: usize, tot
         timeout: timed_out,
         files_scanned: scanned,
         files_matched: matched,
+        files_errored: 0,
         total_matches: total,
     }
 }
@@ -88,6 +89,12 @@ fn apply_limit<T>(items: Vec<T>, limit: Option<usize>) -> Vec<T> {
         Some(n) if n < items.len() => items.into_iter().take(n).collect(),
         _ => items,
     }
+}
+
+fn collect_file_errors(entries: &[FileEntry]) -> Vec<String> {
+    entries.iter()
+        .filter_map(|e| e.error.as_ref().map(|err| format!("{}: {}", e.path, err)))
+        .collect()
 }
 
 fn execute(args: cli::CliArgs) -> i32 {
@@ -245,12 +252,18 @@ fn execute_search(
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
+    let file_errors = collect_file_errors(&entries);
+    let errored = file_errors.len();
     let entries = apply_limit(entries, args.limit);
     let matched = entries.len();
 
+    let mut meta = make_meta(elapsed, timed_out, scanned, matched, None);
+    meta.files_errored = errored;
+
     let envelope = OutputEnvelope {
-        meta: Some(make_meta(elapsed, timed_out, scanned, matched, None)),
+        meta: Some(meta),
         files: Some(entries),
+        errors: if file_errors.is_empty() { None } else { Some(file_errors) },
         error: if timed_out { Some("Operation timed out — partial results may be incomplete".into()) } else { None },
         ..Default::default()
     };
@@ -282,12 +295,18 @@ fn execute_lines(
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
+    let file_errors = collect_file_errors(&entries);
+    let errored = file_errors.len();
     let entries = apply_limit(entries, args.limit);
     let matched = entries.len();
 
+    let mut meta = make_meta(elapsed, timed_out, 0, matched, None);
+    meta.files_errored = errored;
+
     let envelope = OutputEnvelope {
-        meta: Some(make_meta(elapsed, timed_out, 0, matched, None)),
+        meta: Some(meta),
         files: Some(entries),
+        errors: if file_errors.is_empty() { None } else { Some(file_errors) },
         error: timeout_error(timed_out),
         ..Default::default()
     };
@@ -370,12 +389,20 @@ fn execute_symbols(
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
+    let sym_errors: Vec<String> = symbol_files.iter()
+        .filter_map(|sf| sf.error.as_ref().map(|err| format!("{}: {}", sf.path, err)))
+        .collect();
+    let errored = sym_errors.len();
     let symbol_files = apply_limit(symbol_files, args.limit);
     let matched = symbol_files.len();
 
+    let mut meta = make_meta(elapsed, timed_out, scanned, matched, None);
+    meta.files_errored = errored;
+
     let envelope = OutputEnvelope {
-        meta: Some(make_meta(elapsed, timed_out, scanned, matched, None)),
+        meta: Some(meta),
         symbols: Some(symbol_files),
+        errors: if sym_errors.is_empty() { None } else { Some(sym_errors) },
         error: timeout_error(timed_out),
         ..Default::default()
     };
