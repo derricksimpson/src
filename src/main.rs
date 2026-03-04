@@ -69,7 +69,13 @@ fn emit(envelope: &OutputEnvelope, format: OutputFormat, output_path: &Option<St
     }
 }
 
-fn make_meta(elapsed: u128, timed_out: bool, scanned: usize, matched: usize, total: Option<usize>) -> MetaInfo {
+fn make_meta(
+    elapsed: u128,
+    timed_out: bool,
+    scanned: usize,
+    matched: usize,
+    total: Option<usize>,
+) -> MetaInfo {
     MetaInfo {
         elapsed_ms: elapsed,
         timeout: timed_out,
@@ -81,7 +87,11 @@ fn make_meta(elapsed: u128, timed_out: bool, scanned: usize, matched: usize, tot
 }
 
 fn timeout_error(timed_out: bool) -> Option<String> {
-    if timed_out { Some("Operation timed out".into()) } else { None }
+    if timed_out {
+        Some("Operation timed out".into())
+    } else {
+        None
+    }
 }
 
 fn apply_limit<T>(items: Vec<T>, limit: Option<usize>) -> Vec<T> {
@@ -92,7 +102,8 @@ fn apply_limit<T>(items: Vec<T>, limit: Option<usize>) -> Vec<T> {
 }
 
 fn collect_file_errors(entries: &[FileEntry]) -> Vec<String> {
-    entries.iter()
+    entries
+        .iter()
         .filter_map(|e| e.error.as_ref().map(|err| format!("{}: {}", e.path, err)))
         .collect()
 }
@@ -139,7 +150,15 @@ fn execute(args: cli::CliArgs) -> i32 {
     } else if args.count && args.find.is_some() {
         execute_count(&args, root, &filter, &cancelled, start, format)
     } else if let Some(ref find_pattern) = args.find {
-        execute_search(&args, root, find_pattern, &filter, &cancelled, start, format)
+        execute_search(
+            &args,
+            root,
+            find_pattern,
+            &filter,
+            &cancelled,
+            start,
+            format,
+        )
     } else if !args.globs.is_empty() {
         execute_file_listing(&args, root, &filter, &cancelled, start, format)
     } else {
@@ -167,7 +186,11 @@ fn execute_directory_hierarchy(
     };
 
     emit(&envelope, format, &args.output);
-    if timed_out { 2 } else { 0 }
+    if timed_out {
+        2
+    } else {
+        0
+    }
 }
 
 fn execute_file_listing(
@@ -204,7 +227,11 @@ fn execute_file_listing(
     };
 
     emit(&envelope, format, &args.output);
-    if timed_out { 2 } else { 0 }
+    if timed_out {
+        2
+    } else {
+        0
+    }
 }
 
 fn execute_search(
@@ -248,7 +275,13 @@ fn execute_search(
         return 2;
     }
 
-    let entries = searcher::search_files(&candidate_files, root, &matcher, args.line_numbers, cancelled);
+    let entries = searcher::search_files(
+        &candidate_files,
+        root,
+        &matcher,
+        args.line_numbers,
+        cancelled,
+    );
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
@@ -263,13 +296,25 @@ fn execute_search(
     let envelope = OutputEnvelope {
         meta: Some(meta),
         files: Some(entries),
-        errors: if file_errors.is_empty() { None } else { Some(file_errors) },
-        error: if timed_out { Some("Operation timed out — partial results may be incomplete".into()) } else { None },
+        errors: if file_errors.is_empty() {
+            None
+        } else {
+            Some(file_errors)
+        },
+        error: if timed_out {
+            Some("Operation timed out — partial results may be incomplete".into())
+        } else {
+            None
+        },
         ..Default::default()
     };
 
     emit(&envelope, format, &args.output);
-    if timed_out { 2 } else { 0 }
+    if timed_out {
+        2
+    } else {
+        0
+    }
 }
 
 fn execute_lines(
@@ -306,13 +351,21 @@ fn execute_lines(
     let envelope = OutputEnvelope {
         meta: Some(meta),
         files: Some(entries),
-        errors: if file_errors.is_empty() { None } else { Some(file_errors) },
+        errors: if file_errors.is_empty() {
+            None
+        } else {
+            Some(file_errors)
+        },
         error: timeout_error(timed_out),
         ..Default::default()
     };
 
     emit(&envelope, format, &args.output);
-    if timed_out { 2 } else { 0 }
+    if timed_out {
+        2
+    } else {
+        0
+    }
 }
 
 fn execute_graph(
@@ -356,7 +409,11 @@ fn execute_graph(
     };
 
     emit(&envelope, format, &args.output);
-    if timed_out { 2 } else { 0 }
+    if timed_out {
+        2
+    } else {
+        0
+    }
 }
 
 fn execute_symbols(
@@ -389,7 +446,8 @@ fn execute_symbols(
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
-    let sym_errors: Vec<String> = symbol_files.iter()
+    let sym_errors: Vec<String> = symbol_files
+        .iter()
         .filter_map(|sf| sf.error.as_ref().map(|err| format!("{}: {}", sf.path, err)))
         .collect();
     let errored = sym_errors.len();
@@ -402,13 +460,21 @@ fn execute_symbols(
     let envelope = OutputEnvelope {
         meta: Some(meta),
         symbols: Some(symbol_files),
-        errors: if sym_errors.is_empty() { None } else { Some(sym_errors) },
+        errors: if sym_errors.is_empty() {
+            None
+        } else {
+            Some(sym_errors)
+        },
         error: timeout_error(timed_out),
         ..Default::default()
     };
 
     emit(&envelope, format, &args.output);
-    if timed_out { 2 } else { 0 }
+    if timed_out {
+        2
+    } else {
+        0
+    }
 }
 
 fn execute_stats(
@@ -449,7 +515,11 @@ fn execute_stats(
     };
 
     emit(&envelope, format, &args.output);
-    if timed_out { 2 } else { 0 }
+    if timed_out {
+        2
+    } else {
+        0
+    }
 }
 
 fn execute_count(
@@ -503,31 +573,31 @@ fn execute_count(
     let envelope = OutputEnvelope {
         meta: Some(make_meta(elapsed, timed_out, scanned, matched, Some(total))),
         counts: Some(count_entries),
-        error: if timed_out { Some("Operation timed out — partial results may be incomplete".into()) } else { None },
+        error: if timed_out {
+            Some("Operation timed out — partial results may be incomplete".into())
+        } else {
+            None
+        },
         ..Default::default()
     };
 
     emit(&envelope, format, &args.output);
-    if timed_out { 2 } else { 0 }
+    if timed_out {
+        2
+    } else {
+        0
+    }
 }
 
 #[cfg(unix)]
 fn ctrlc_handler(cancelled: Arc<AtomicBool>) {
-    unsafe {
-        libc::signal(libc::SIGINT, handle_sigint as libc::sighandler_t);
-    }
-    CANCELLED_GLOBAL.store(Box::into_raw(Box::new(cancelled)) as usize, Ordering::SeqCst);
-}
+    use signal_hook::consts::signal::{SIGINT, SIGTERM};
+    use signal_hook::flag;
 
-#[cfg(unix)]
-static CANCELLED_GLOBAL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-#[cfg(unix)]
-extern "C" fn handle_sigint(_: libc::c_int) {
-    let ptr = CANCELLED_GLOBAL.load(Ordering::SeqCst);
-    if ptr != 0 {
-        let cancelled = unsafe { &*(ptr as *const Arc<AtomicBool>) };
-        cancelled.store(true, Ordering::SeqCst);
+    for sig in [SIGINT, SIGTERM] {
+        if let Err(e) = flag::register(sig, Arc::clone(&cancelled)) {
+            eprintln!("Failed to register signal handler for {}: {}", sig, e);
+        }
     }
 }
 
@@ -535,20 +605,31 @@ extern "C" fn handle_sigint(_: libc::c_int) {
 fn ctrlc_handler(cancelled: Arc<AtomicBool>) {
     use std::sync::OnceLock;
     static CANCELLED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
-    CANCELLED.get_or_init(|| cancelled);
+    let _ = CANCELLED.set(Arc::clone(&cancelled));
 
-    unsafe {
-        SetConsoleCtrlHandler(Some(handler), 1);
-    }
+    unsafe extern "system" fn handler(ctrl_type: u32) -> i32 {
+        const CTRL_C_EVENT: u32 = 0;
+        const CTRL_BREAK_EVENT: u32 = 1;
 
-    unsafe extern "system" fn handler(_: u32) -> i32 {
-        if let Some(c) = CANCELLED.get() {
-            c.store(true, Ordering::SeqCst);
+        if matches!(ctrl_type, CTRL_C_EVENT | CTRL_BREAK_EVENT) {
+            if let Some(c) = CANCELLED.get() {
+                c.store(true, Ordering::Relaxed);
+            }
+            1
+        } else {
+            0
         }
-        1
     }
 
     extern "system" {
-        fn SetConsoleCtrlHandler(handler: Option<unsafe extern "system" fn(u32) -> i32>, add: i32) -> i32;
+        fn SetConsoleCtrlHandler(
+            handler: Option<unsafe extern "system" fn(u32) -> i32>,
+            add: i32,
+        ) -> i32;
+    }
+
+    let ok = unsafe { SetConsoleCtrlHandler(Some(handler), 1) };
+    if ok == 0 {
+        eprintln!("SetConsoleCtrlHandler failed");
     }
 }

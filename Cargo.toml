@@ -12,6 +12,9 @@ rayon = "1"
 memmap2 = "0.9"
 regex = "1"
 
+[target.'cfg(unix)'.dependencies]
+signal-hook = "0.3"
+
 [profile.release]
 opt-level = 3
 lto = true
