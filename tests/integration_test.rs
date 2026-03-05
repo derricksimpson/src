@@ -657,4 +657,314 @@ fn help_includes_new_flags() {
     assert!(stdout.contains("--format"));
     assert!(stdout.contains("--json"));
     assert!(stdout.contains("--output"));
+    assert!(stdout.contains("--callers"));
+    assert!(stdout.contains("--compact"));
+    assert!(stdout.contains("--with-comments"));
+    assert!(stdout.contains("--with-tests"));
+    assert!(stdout.contains("--auto-expand"));
+}
+
+// ── --with-tests (test file filtering) ──
+
+#[test]
+fn test_files_excluded_by_default() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.ts"]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("helpers_test.ts"));
+    assert!(!stdout.contains("utils.spec.ts"));
+    assert!(stdout.contains("utils.ts"));
+    assert!(stdout.contains("config.ts"));
+}
+
+#[test]
+fn with_tests_includes_test_files() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.ts", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("helpers_test.ts"));
+    assert!(stdout.contains("utils.spec.ts"));
+    assert!(stdout.contains("utils.ts"));
+}
+
+#[test]
+fn test_files_excluded_in_symbols() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-g", "*.ts"]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("helpers_test.ts"));
+    assert!(!stdout.contains("utils.spec.ts"));
+}
+
+#[test]
+fn with_tests_includes_in_symbols() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-g", "*.ts", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("helpers_test.ts") || stdout.contains("utils.spec.ts"));
+}
+
+#[test]
+fn test_files_excluded_in_stats() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-S"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("languages:"));
+}
+
+#[test]
+fn test_files_excluded_in_search() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-f", "describe", "-g", "*.ts"]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("helpers_test.ts"));
+    assert!(!stdout.contains("utils.spec.ts"));
+}
+
+#[test]
+fn with_tests_includes_in_search() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-f", "describe", "-g", "*.ts", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("helpers_test.ts") || stdout.contains("utils.spec.ts"));
+}
+
+#[test]
+fn test_files_excluded_in_count() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-f", "describe", "-c", "-g", "*.ts"]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("helpers_test.ts"));
+}
+
+#[test]
+fn lines_explicit_path_ignores_test_filter() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--lines", "lib/helpers_test.ts:1:5"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("helpers_test.ts"));
+}
+
+// ── --symbols --find (combined mode) ──
+
+#[test]
+fn symbols_find_filters_by_name() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-f", "main", "-g", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("symbols:"));
+    assert!(stdout.contains("main"));
+}
+
+#[test]
+fn symbols_find_no_match() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-f", "xyznonexistent", "-g", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("meta:"));
+}
+
+#[test]
+fn symbols_find_with_regex() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-f", "^add$", "-g", "*.rs", "-E"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("symbols:"));
+}
+
+#[test]
+fn symbols_find_reports_total_matches() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-f", "main", "-g", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("totalMatches:"));
+}
+
+#[test]
+fn symbols_find_json() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-f", "main", "-g", "*.rs", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"symbols\""));
+    assert!(stdout.contains("\"totalMatches\""));
+}
+
+// ── --compact ──
+
+#[test]
+fn compact_symbol_output() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--compact", "-g", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("symbols:"));
+    assert!(stdout.contains("fn main"));
+    assert!(!stdout.contains("funcs:"));
+}
+
+#[test]
+fn compact_without_symbols_error() {
+    let (_, stderr, code) = run_src(&["--compact"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("--compact requires --symbols"));
+}
+
+#[test]
+fn compact_json() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--compact", "-g", "*.rs", "--json"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"kind\""));
+    assert!(stdout.contains("\"name\""));
+    assert!(!stdout.contains("\"signature\""));
+}
+
+#[test]
+fn compact_with_find() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--compact", "-f", "main", "-g", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("fn main"));
+}
+
+// ── --with-comments ──
+
+#[test]
+fn with_comments_shows_doc_comments() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--with-comments", "-g", "*.rs", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("comment:"));
+}
+
+#[test]
+fn with_comments_on_documented_rs() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--with-comments", "-g", "documented.rs", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("comment:"));
+    assert!(stdout.contains("Processes an input file"));
+}
+
+#[test]
+fn without_comments_omits() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-g", "documented.rs", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("comment:"));
+}
+
+#[test]
+fn with_comments_without_symbols_error() {
+    let (_, stderr, code) = run_src(&["--with-comments"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("--with-comments requires --symbols"));
+}
+
+#[test]
+fn with_comments_json() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--with-comments", "-g", "documented.rs", "--json", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("\"comment\""));
+}
+
+#[test]
+fn with_comments_compact() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--compact", "--with-comments", "-g", "documented.rs", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("comment:"));
+    assert!(!stdout.contains("funcs:"));
+}
+
+#[test]
+fn python_docstring_extraction() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--with-comments", "-g", "documented.py", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("comment:"));
+}
+
+// ── --callers ──
+
+#[test]
+fn callers_basic() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--callers", "helper", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("callers:") || stdout.contains("declaration"));
+}
+
+#[test]
+fn callers_with_glob() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--callers", "greet", "-g", "*.ts", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("declaration") || stdout.contains("callers:"));
+}
+
+#[test]
+fn callers_no_declaration() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--callers", "xyznonexistent", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("null") || stdout.contains("callers: []"));
+}
+
+#[test]
+fn callers_json() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--callers", "helper", "--json", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.starts_with('{'));
+    assert!(stdout.contains("\"callers\""));
+}
+
+#[test]
+fn callers_exclusive_errors() {
+    let (_, stderr, code) = run_src_in(&fixture(), &["--callers", "foo", "-f", "bar"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("mutually exclusive"));
+}
+
+#[test]
+fn callers_exclusive_with_symbols_integration() {
+    let (_, stderr, code) = run_src_in(&fixture(), &["--callers", "foo", "-s"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("mutually exclusive"));
+}
+
+#[test]
+fn callers_with_limit() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--callers", "helper", "--limit", "1", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("meta:"));
+}
+
+// ── --auto-expand ──
+
+#[test]
+fn auto_expand_basic() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--lines", "src/main.rs:6:6", "--auto-expand"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("fn main"));
+}
+
+#[test]
+fn auto_expand_without_lines_error() {
+    let (_, stderr, code) = run_src(&["--auto-expand"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("--auto-expand requires --lines"));
+}
+
+#[test]
+fn auto_expand_no_symbol() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--lines", "src/main.rs:1:1", "--auto-expand"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("main.rs"));
+}
+
+#[test]
+fn auto_expand_includes_full_function() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--lines", "src/main.rs:11:11", "--auto-expand"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("pub fn add"));
+}
+
+// ── Dispatch priority ──
+
+#[test]
+fn dispatch_callers_before_symbols() {
+    let (_, stderr, code) = run_src_in(&fixture(), &["--callers", "main", "-s"]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("mutually exclusive"));
+}
+
+// ── Combined new enhancement flags ──
+
+#[test]
+fn combined_with_tests_and_symbols_find() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-f", "greet", "-g", "*.ts", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("symbols:"));
+}
+
+#[test]
+fn combined_compact_with_find() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "--compact", "-f", "add", "-g", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("fn add"));
 }

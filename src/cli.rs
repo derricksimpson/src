@@ -16,6 +16,11 @@ pub struct CliArgs {
     pub limit: Option<usize>,
     pub format: OutputFormatArg,
     pub output: Option<String>,
+    pub callers: Option<String>,
+    pub compact: bool,
+    pub with_comments: bool,
+    pub with_tests: bool,
+    pub auto_expand: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -48,6 +53,11 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut limit: Option<usize> = None;
     let mut format = OutputFormatArg::Yaml;
     let mut output: Option<String> = None;
+    let mut callers: Option<String> = None;
+    let mut compact = false;
+    let mut with_comments = false;
+    let mut with_tests = false;
+    let mut auto_expand = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -123,6 +133,15 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 };
             }
             "--json" => format = OutputFormatArg::Json,
+            "--callers" => {
+                i += 1;
+                if i >= args.len() { return Err("Missing value for --callers".into()); }
+                callers = Some(args[i].clone());
+            }
+            "--compact" => compact = true,
+            "--with-comments" => with_comments = true,
+            "--with-tests" => with_tests = true,
+            "--auto-expand" => auto_expand = true,
             "--output" | "-o" => {
                 i += 1;
                 if i >= args.len() { return Err("Missing value for --output".into()); }
@@ -139,14 +158,29 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
         return Err("--count requires --find <pattern>".into());
     }
 
+    if compact && !symbols {
+        return Err("--compact requires --symbols".into());
+    }
+    if with_comments && !symbols {
+        return Err("--with-comments requires --symbols".into());
+    }
+    if auto_expand && lines.is_empty() {
+        return Err("--auto-expand requires --lines".into());
+    }
+
+    if symbols && find.is_some() && count {
+        return Err("--symbols --find --count are mutually exclusive and cannot be combined.".into());
+    }
+
     let mut exclusive_count = 0;
     let mut exclusive_names = Vec::new();
-    if find.is_some() && !count { exclusive_count += 1; exclusive_names.push("--find"); }
+    if find.is_some() && !count && !symbols { exclusive_count += 1; exclusive_names.push("--find"); }
     if find.is_some() && count { exclusive_count += 1; exclusive_names.push("--find --count"); }
     if !lines.is_empty() { exclusive_count += 1; exclusive_names.push("--lines"); }
     if graph { exclusive_count += 1; exclusive_names.push("--graph"); }
     if symbols { exclusive_count += 1; exclusive_names.push("--symbols"); }
     if stats { exclusive_count += 1; exclusive_names.push("--stats"); }
+    if callers.is_some() { exclusive_count += 1; exclusive_names.push("--callers"); }
     if exclusive_count > 1 {
         return Err(format!("{} are mutually exclusive and cannot be combined.", exclusive_names.join(" and ")));
     }
@@ -172,6 +206,11 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
         limit,
         format,
         output,
+        callers,
+        compact,
+        with_comments,
+        with_tests,
+        auto_expand,
     }))
 }
 
@@ -189,6 +228,7 @@ Modes:
   --lines "<specs>"       Extract specific line ranges from files
   --graph                 Show project-internal dependency graph
   --symbols, -s           Extract symbol declarations from source files
+  --callers <name>        Find all references/call sites for a symbol
   --stats, -S             Show codebase statistics (files, lines, bytes by language)
 
 Options:
@@ -198,8 +238,13 @@ Options:
   --lines "<specs>"       Line specs: "file:start:end file2:start:end" (repeatable)
   --graph                 Emit source dependency graph
   --symbols, -s           Extract symbol declarations (compact: signature :start:end)
+  --callers <name>        Find declaration and all call sites for a symbol name
   --count, -c             Show match counts per file (requires --find)
   --stats, -S             File counts, line counts, byte sizes by extension
+  --compact               Ultra-compact symbol output: kind name :line:end (requires --symbols)
+  --with-comments         Include doc comments in symbol output (requires --symbols)
+  --with-tests            Include test files in output (excluded by default)
+  --auto-expand           Expand --lines ranges to full enclosing symbol (requires --lines)
   --limit, -L <n>         Max number of files in the output
   --no-line-numbers       Suppress per-line number prefixes in content output
   --timeout <secs>        Max execution time in seconds
@@ -226,12 +271,19 @@ Examples:
   src --graph                                     Show dependency graph
   src --graph -g *.rs                             Rust-only dependency graph
   src -s -g *.rs                                  Extract Rust symbol declarations
+  src -s -f "handle" -g *.rs                      Find symbols named "handle" in Rust files
+  src -s --compact                                Ultra-compact symbol listing
+  src -s --with-comments                          Symbols with doc comments
+  src --callers process_file                      Find all call sites of process_file
+  src --callers main -g *.rs                      Find callers scoped to Rust files
+  src --lines "src/main.rs:105:105" --auto-expand Auto-expand to full enclosing function
   src -g *.ts -f "import" -c                      Count import occurrences per file
   src --stats                                     Codebase statistics overview
   src -d /path/to/project                         Scan a specific directory
   src -f "TODO" --limit 10                        Find TODOs, cap at 10 files
   src --symbols --json                            Symbols in JSON format
   src --stats -o stats.yaml                       Write stats to file
+  src -s --with-tests                             Include test files in symbol output
 "#);
 }
 
@@ -561,9 +613,16 @@ mod tests {
     }
 
     #[test]
-    fn mutual_exclusivity_search_and_symbols() {
+    fn symbols_find_combined_mode_allowed() {
         let result = parse_args(&args(&["--f", "test", "--symbols"]));
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        match result.unwrap() {
+            CliAction::Run(a) => {
+                assert!(a.symbols);
+                assert_eq!(a.find, Some("test".to_owned()));
+            }
+            _ => panic!("Expected Run"),
+        }
     }
 
     #[test]
@@ -825,6 +884,177 @@ mod tests {
                 assert_eq!(a.limit, Some(20));
                 assert_eq!(a.format, OutputFormatArg::Json);
                 assert_eq!(a.output, Some("result.json".to_owned()));
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    // ── New enhancement flags ──
+
+    #[test]
+    fn callers_flag() {
+        match parse_args(&args(&["--callers", "process_file"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.callers, Some("process_file".to_owned())),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn missing_value_for_callers() {
+        let result = parse_args(&args(&["--callers"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn compact_flag() {
+        match parse_args(&args(&["--symbols", "--compact"])).unwrap() {
+            CliAction::Run(a) => {
+                assert!(a.symbols);
+                assert!(a.compact);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn compact_without_symbols_error() {
+        let result = parse_args(&args(&["--compact"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--compact requires --symbols"));
+    }
+
+    #[test]
+    fn with_comments_flag() {
+        match parse_args(&args(&["-s", "--with-comments"])).unwrap() {
+            CliAction::Run(a) => {
+                assert!(a.symbols);
+                assert!(a.with_comments);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn with_comments_without_symbols_error() {
+        let result = parse_args(&args(&["--with-comments"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--with-comments requires --symbols"));
+    }
+
+    #[test]
+    fn with_tests_flag() {
+        match parse_args(&args(&["--with-tests"])).unwrap() {
+            CliAction::Run(a) => assert!(a.with_tests),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn with_tests_default_false() {
+        match parse_args(&args(&[])).unwrap() {
+            CliAction::Run(a) => assert!(!a.with_tests),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn auto_expand_flag() {
+        match parse_args(&args(&["--lines", "f:1:2", "--auto-expand"])).unwrap() {
+            CliAction::Run(a) => {
+                assert!(a.auto_expand);
+                assert!(!a.lines.is_empty());
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn auto_expand_without_lines_error() {
+        let result = parse_args(&args(&["--auto-expand"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("--auto-expand requires --lines"));
+    }
+
+    #[test]
+    fn callers_exclusive_with_find() {
+        let result = parse_args(&args(&["--callers", "foo", "-f", "bar"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn callers_exclusive_with_symbols() {
+        let result = parse_args(&args(&["--callers", "foo", "--symbols"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn callers_exclusive_with_graph() {
+        let result = parse_args(&args(&["--callers", "foo", "--graph"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn callers_exclusive_with_lines() {
+        let result = parse_args(&args(&["--callers", "foo", "--lines", "f:1:2"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn callers_exclusive_with_stats() {
+        let result = parse_args(&args(&["--callers", "foo", "--stats"]));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn symbols_find_count_error() {
+        let result = parse_args(&args(&["-s", "-f", "test", "-c"]));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn symbols_find_with_glob() {
+        match parse_args(&args(&["-s", "-f", "handle", "-g", "*.rs"])).unwrap() {
+            CliAction::Run(a) => {
+                assert!(a.symbols);
+                assert_eq!(a.find, Some("handle".to_owned()));
+                assert_eq!(a.globs, vec!["*.rs"]);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn symbols_compact_with_comments() {
+        match parse_args(&args(&["-s", "--compact", "--with-comments"])).unwrap() {
+            CliAction::Run(a) => {
+                assert!(a.symbols);
+                assert!(a.compact);
+                assert!(a.with_comments);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn callers_with_regex() {
+        match parse_args(&args(&["--callers", "handle.*", "-E"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.callers, Some("handle.*".to_owned()));
+                assert!(a.is_regex);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn callers_with_glob() {
+        match parse_args(&args(&["--callers", "main", "-g", "*.rs"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.callers, Some("main".to_owned()));
+                assert_eq!(a.globs, vec!["*.rs"]);
             }
             _ => panic!("Expected Run"),
         }
