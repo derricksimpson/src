@@ -37,6 +37,7 @@ pub fn scan_directories(
     root: &Path,
     filter: &ExclusionFilter,
     cancelled: &AtomicBool,
+    include_tests: bool,
 ) -> ScanResult {
     if cancelled.load(Ordering::Relaxed) {
         return ScanResult { name: String::new(), children: None, files: None };
@@ -64,10 +65,15 @@ pub fn scan_directories(
 
         if ft.is_file() {
             if is_source_file(&name_str) {
-                files.push(name_str.into_owned());
+                if include_tests || !is_test_file(&name_str) {
+                    files.push(name_str.into_owned());
+                }
             }
         } else if ft.is_dir() && !filter.is_excluded(&name_str) {
-            subdirs.push(entry.path());
+            if include_tests || !matches!(name_str.to_ascii_lowercase().as_str(),
+                "tests" | "test" | "__tests__" | "spec" | "specs") {
+                subdirs.push(entry.path());
+            }
         }
     }
 
@@ -77,7 +83,7 @@ pub fn scan_directories(
             if cancelled.load(Ordering::Relaxed) {
                 return None;
             }
-            let child = scan_directories(subdir, filter, cancelled);
+            let child = scan_directories(subdir, filter, cancelled, include_tests);
             if child.files.is_some() || child.children.is_some() {
                 Some(child)
             } else {
@@ -94,6 +100,60 @@ pub fn scan_directories(
         name: dir_name,
         children: if children.is_empty() { None } else { Some(children) },
         files: if files.is_empty() { None } else { Some(files) },
+    }
+}
+
+pub fn is_test_file(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+
+    for component in lower.split('/') {
+        if matches!(component, "tests" | "test" | "__tests__" | "spec" | "specs") {
+            return true;
+        }
+    }
+
+    let filename = lower.rsplit('/').next().unwrap_or(&lower);
+    if let Some(dot_pos) = filename.find('.') {
+        let stem = &filename[..dot_pos];
+        let after_first_dot = &filename[dot_pos..];
+
+        if stem.starts_with("test_") {
+            return true;
+        }
+        if stem.ends_with("_test") || stem.ends_with("_spec") {
+            return true;
+        }
+        if after_first_dot.starts_with(".test.") || after_first_dot.starts_with(".spec.") {
+            return true;
+        }
+        let without_first_ext = &stem;
+        if let Some(inner_dot) = without_first_ext.rfind('.') {
+            let inner_suffix = &without_first_ext[inner_dot..];
+            if inner_suffix == ".test" || inner_suffix == ".spec" {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+pub fn find_files_filtered(
+    root: &Path,
+    globs: &[String],
+    filter: &ExclusionFilter,
+    cancelled: &AtomicBool,
+    include_tests: bool,
+) -> Vec<String> {
+    let files = find_files(root, globs, filter, cancelled);
+    if include_tests {
+        files
+    } else {
+        files.into_iter().filter(|f| {
+            let rel = crate::path_helper::normalized_relative(root, std::path::Path::new(f));
+            !is_test_file(&rel)
+        }).collect()
     }
 }
 
@@ -163,4 +223,77 @@ fn find_files_parallel(
     }
 
     files
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_file_suffix_test() {
+        assert!(is_test_file("foo_test.rs"));
+        assert!(is_test_file("bar_test.go"));
+        assert!(is_test_file("baz_test.py"));
+    }
+
+    #[test]
+    fn test_file_suffix_spec() {
+        assert!(is_test_file("foo_spec.ts"));
+        assert!(is_test_file("bar_spec.rb"));
+    }
+
+    #[test]
+    fn test_file_prefix() {
+        assert!(is_test_file("test_utils.py"));
+        assert!(is_test_file("test_main.rs"));
+    }
+
+    #[test]
+    fn test_file_dot_test() {
+        assert!(is_test_file("utils.test.ts"));
+        assert!(is_test_file("app.test.tsx"));
+    }
+
+    #[test]
+    fn test_file_dot_spec() {
+        assert!(is_test_file("service.spec.ts"));
+        assert!(is_test_file("handler.spec.js"));
+    }
+
+    #[test]
+    fn test_file_directory_tests() {
+        assert!(is_test_file("tests/unit/foo.rs"));
+        assert!(is_test_file("__tests__/app.test.js"));
+        assert!(is_test_file("spec/models/user_spec.rb"));
+        assert!(is_test_file("test/main_test.go"));
+    }
+
+    #[test]
+    fn test_file_case_insensitive() {
+        assert!(is_test_file("FOO_TEST.RS"));
+        assert!(is_test_file("Bar_Spec.ts"));
+        assert!(is_test_file("TEST_utils.py"));
+    }
+
+    #[test]
+    fn test_file_non_test() {
+        assert!(!is_test_file("main.rs"));
+        assert!(!is_test_file("utils.ts"));
+        assert!(!is_test_file("app.py"));
+        assert!(!is_test_file("src/lib.rs"));
+        assert!(!is_test_file("attestation.rs"));
+        assert!(!is_test_file("contest.py"));
+        assert!(!is_test_file("latest_version.ts"));
+    }
+
+    #[test]
+    fn test_file_windows_paths() {
+        assert!(is_test_file("tests\\unit\\foo.rs"));
+        assert!(is_test_file("__tests__\\app.test.js"));
+    }
+
+    #[test]
+    fn test_file_specs_dir_excluded() {
+        assert!(is_test_file("specs/requirement.md"));
+    }
 }

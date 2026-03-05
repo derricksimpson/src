@@ -23,6 +23,7 @@ pub struct SymbolInfo {
     pub visibility: Option<&'static str>,
     pub parent: Option<String>,
     pub signature: String,
+    pub comment: Option<String>,
 }
 
 pub trait LangSymbols: Sync {

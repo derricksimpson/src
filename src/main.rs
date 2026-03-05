@@ -1,3 +1,4 @@
+mod callers;
 mod cli;
 mod count;
 mod exclusion;
@@ -143,6 +144,8 @@ fn execute(args: cli::CliArgs) -> i32 {
         execute_lines(&args, root, &cancelled, start, format)
     } else if args.graph {
         execute_graph(&args, root, &filter, &cancelled, start, format)
+    } else if args.callers.is_some() {
+        execute_callers(&args, root, &filter, &cancelled, start, format)
     } else if args.symbols {
         execute_symbols(&args, root, &filter, &cancelled, start, format)
     } else if args.stats {
@@ -174,7 +177,7 @@ fn execute_directory_hierarchy(
     start: Instant,
     format: OutputFormat,
 ) -> i32 {
-    let tree = scanner::scan_directories(root, filter, cancelled);
+    let tree = scanner::scan_directories(root, filter, cancelled, args.with_tests);
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
@@ -201,7 +204,7 @@ fn execute_file_listing(
     start: Instant,
     format: OutputFormat,
 ) -> i32 {
-    let files = scanner::find_files(root, &args.globs, filter, cancelled);
+    let files = scanner::find_files_filtered(root, &args.globs, filter, cancelled, args.with_tests);
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
@@ -261,7 +264,7 @@ fn execute_search(
         args.globs.clone()
     };
 
-    let candidate_files = scanner::find_files(root, &globs, filter, cancelled);
+    let candidate_files = scanner::find_files_filtered(root, &globs, filter, cancelled, args.with_tests);
     let scanned = candidate_files.len();
 
     if cancelled.load(Ordering::Relaxed) {
@@ -336,6 +339,12 @@ fn execute_lines(
         }
     };
 
+    let specs = if args.auto_expand {
+        lines::expand_line_specs(&specs, root, args.with_comments)
+    } else {
+        specs
+    };
+
     let entries = lines::extract_lines(&specs, root, args.line_numbers, cancelled);
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
@@ -377,9 +386,9 @@ fn execute_graph(
     format: OutputFormat,
 ) -> i32 {
     let files = if args.globs.is_empty() {
-        scanner::find_files(root, &["*.*".to_owned()], filter, cancelled)
+        scanner::find_files_filtered(root, &["*.*".to_owned()], filter, cancelled, args.with_tests)
     } else {
-        scanner::find_files(root, &args.globs, filter, cancelled)
+        scanner::find_files_filtered(root, &args.globs, filter, cancelled, args.with_tests)
     };
 
     let scanned = files.len();
@@ -416,7 +425,7 @@ fn execute_graph(
     }
 }
 
-fn execute_symbols(
+fn execute_callers(
     args: &cli::CliArgs,
     root: &Path,
     filter: &exclusion::ExclusionFilter,
@@ -424,10 +433,12 @@ fn execute_symbols(
     start: Instant,
     format: OutputFormat,
 ) -> i32 {
+    let name = args.callers.as_ref().unwrap();
+
     let files = if args.globs.is_empty() {
-        scanner::find_files(root, &["*.*".to_owned()], filter, cancelled)
+        scanner::find_files_filtered(root, &["*.*".to_owned()], filter, cancelled, args.with_tests)
     } else {
-        scanner::find_files(root, &args.globs, filter, cancelled)
+        scanner::find_files_filtered(root, &args.globs, filter, cancelled, args.with_tests)
     };
 
     let scanned = files.len();
@@ -442,7 +453,93 @@ fn execute_symbols(
         return 2;
     }
 
-    let symbol_files = symbols::extract_symbols(&files, root, cancelled);
+    let callers_output = match callers::find_callers(&files, root, name, args.is_regex, cancelled) {
+        Ok(c) => c,
+        Err(e) => {
+            let envelope = OutputEnvelope {
+                error: Some(e),
+                ..Default::default()
+            };
+            emit(&envelope, format, &args.output);
+            return 1;
+        }
+    };
+
+    let elapsed = start.elapsed().as_millis();
+    let timed_out = cancelled.load(Ordering::Relaxed);
+
+    let total_refs: usize = callers_output.files.iter().map(|f| f.sites.len()).sum();
+    let callers_output = if let Some(limit) = args.limit {
+        models::CallersOutput {
+            declarations: callers_output.declarations,
+            files: callers_output.files.into_iter().take(limit).collect(),
+        }
+    } else {
+        callers_output
+    };
+    let matched = callers_output.files.len();
+
+    let envelope = OutputEnvelope {
+        meta: Some(make_meta(elapsed, timed_out, scanned, matched, Some(total_refs))),
+        callers: Some(callers_output),
+        error: timeout_error(timed_out),
+        ..Default::default()
+    };
+
+    emit(&envelope, format, &args.output);
+    if timed_out {
+        2
+    } else {
+        0
+    }
+}
+
+fn execute_symbols(
+    args: &cli::CliArgs,
+    root: &Path,
+    filter: &exclusion::ExclusionFilter,
+    cancelled: &AtomicBool,
+    start: Instant,
+    format: OutputFormat,
+) -> i32 {
+    let files = if args.globs.is_empty() {
+        scanner::find_files_filtered(root, &["*.*".to_owned()], filter, cancelled, args.with_tests)
+    } else {
+        scanner::find_files_filtered(root, &args.globs, filter, cancelled, args.with_tests)
+    };
+
+    let scanned = files.len();
+    if cancelled.load(Ordering::Relaxed) {
+        let elapsed = start.elapsed().as_millis();
+        let envelope = OutputEnvelope {
+            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
+            error: Some("Operation timed out".into()),
+            ..Default::default()
+        };
+        emit(&envelope, format, &args.output);
+        return 2;
+    }
+
+    let symbol_files = symbols::extract_symbols(&files, root, cancelled, args.with_comments);
+
+    let (symbol_files, total_matches) = if let Some(ref find_pattern) = args.find {
+        let matcher = match Matcher::build(find_pattern, args.is_regex) {
+            Ok(m) => m,
+            Err(e) => {
+                let envelope = OutputEnvelope {
+                    error: Some(e),
+                    ..Default::default()
+                };
+                emit(&envelope, format, &args.output);
+                return 1;
+            }
+        };
+        symbols::filter_symbols(symbol_files, &matcher)
+    } else {
+        let count = symbol_files.iter().map(|sf| sf.symbols.len()).sum();
+        (symbol_files, count)
+    };
+
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
@@ -454,12 +551,14 @@ fn execute_symbols(
     let symbol_files = apply_limit(symbol_files, args.limit);
     let matched = symbol_files.len();
 
-    let mut meta = make_meta(elapsed, timed_out, scanned, matched, None);
+    let total = if args.find.is_some() { Some(total_matches) } else { None };
+    let mut meta = make_meta(elapsed, timed_out, scanned, matched, total);
     meta.files_errored = errored;
 
     let envelope = OutputEnvelope {
         meta: Some(meta),
         symbols: Some(symbol_files),
+        compact_symbols: args.compact,
         errors: if sym_errors.is_empty() {
             None
         } else {
@@ -486,9 +585,9 @@ fn execute_stats(
     format: OutputFormat,
 ) -> i32 {
     let files = if args.globs.is_empty() {
-        scanner::find_files(root, &["*.*".to_owned()], filter, cancelled)
+        scanner::find_files_filtered(root, &["*.*".to_owned()], filter, cancelled, args.with_tests)
     } else {
-        scanner::find_files(root, &args.globs, filter, cancelled)
+        scanner::find_files_filtered(root, &args.globs, filter, cancelled, args.with_tests)
     };
 
     let scanned = files.len();
@@ -549,7 +648,7 @@ fn execute_count(
         args.globs.clone()
     };
 
-    let candidate_files = scanner::find_files(root, &globs, filter, cancelled);
+    let candidate_files = scanner::find_files_filtered(root, &globs, filter, cancelled, args.with_tests);
     let scanned = candidate_files.len();
 
     if cancelled.load(Ordering::Relaxed) {

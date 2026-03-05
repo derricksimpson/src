@@ -88,6 +88,7 @@ impl LangSymbols for JavaImports {
                     visibility: vis,
                     parent: None,
                     signature: common::make_signature_brace(trimmed),
+                    comment: None,
                 });
                 current_class = Some(name);
                 in_class = true;
@@ -106,6 +107,7 @@ impl LangSymbols for JavaImports {
                     visibility: vis,
                     parent: None,
                     signature: common::make_signature_brace(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -120,6 +122,7 @@ impl LangSymbols for JavaImports {
                     visibility: vis,
                     parent: None,
                     signature: common::make_signature_brace(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -134,6 +137,7 @@ impl LangSymbols for JavaImports {
                     visibility: vis,
                     parent: None,
                     signature: common::make_signature_brace(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -148,6 +152,7 @@ impl LangSymbols for JavaImports {
                     visibility: vis,
                     parent: None,
                     signature: common::make_signature_brace(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -165,6 +170,7 @@ impl LangSymbols for JavaImports {
                         visibility: vis,
                         parent: current_class.clone(),
                         signature: common::make_signature_brace(trimmed),
+                        comment: None,
                     });
                     continue;
                 }
@@ -179,6 +185,7 @@ impl LangSymbols for JavaImports {
                         visibility: vis,
                         parent: current_class.clone(),
                         signature: trimmed.to_owned(),
+                        comment: None,
                     });
                     continue;
                 }
@@ -193,6 +200,7 @@ impl LangSymbols for JavaImports {
                         visibility: vis,
                         parent: None,
                         signature: common::make_signature_brace(trimmed),
+                        comment: None,
                     });
                 }
             }

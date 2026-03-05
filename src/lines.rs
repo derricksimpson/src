@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rayon::prelude::*;
 
 use crate::file_reader;
+use crate::lang;
+use crate::lang::common;
 use crate::models::FileEntry;
 use crate::path_helper;
 use crate::searcher;
@@ -44,6 +46,79 @@ pub fn parse_line_specs(raw: &[String], root: &Path) -> Result<Vec<LineSpec>, St
         specs.push(LineSpec { path: norm, start, end });
     }
     Ok(specs)
+}
+
+pub fn expand_line_specs(
+    specs: &[LineSpec],
+    root: &Path,
+    with_comments: bool,
+) -> Vec<LineSpec> {
+    specs
+        .iter()
+        .map(|spec| {
+            let full_path = root.join(&spec.path);
+            let ext = match full_path.extension().and_then(|e| e.to_str()) {
+                Some(e) => e.to_owned(),
+                None => return LineSpec { path: spec.path.clone(), start: spec.start, end: spec.end },
+            };
+            let handler = match lang::get_symbol_handler(&ext) {
+                Some(h) => h,
+                None => return LineSpec { path: spec.path.clone(), start: spec.start, end: spec.end },
+            };
+            let content = match file_reader::read_file(&full_path) {
+                Ok(Some(c)) => c,
+                _ => return LineSpec { path: spec.path.clone(), start: spec.start, end: spec.end },
+            };
+
+            let symbols = handler.extract_symbols(&content);
+
+            let enclosing = symbols.iter().find(|sym| {
+                spec.start >= sym.line && spec.start <= sym.end_line
+            });
+
+            match enclosing {
+                Some(sym) => {
+                    let mut new_start = sym.line;
+                    let new_end = sym.end_line.max(spec.end);
+
+                    if with_comments && new_start > 1 {
+                        let lines: Vec<&str> = content.lines().collect();
+                        if let Some(_comment) = common::extract_preceding_comment(&lines, new_start - 1) {
+                            let mut idx = new_start - 2;
+                            loop {
+                                let trimmed = lines[idx].trim();
+                                let is_comment = trimmed.starts_with("///")
+                                    || trimmed.starts_with("//!")
+                                    || trimmed.starts_with("//")
+                                    || (trimmed.starts_with('#') && !trimmed.starts_with("#["))
+                                    || trimmed.starts_with('*')
+                                    || trimmed.starts_with("/*");
+                                if !is_comment || trimmed.is_empty() {
+                                    new_start = idx + 2;
+                                    break;
+                                }
+                                if idx == 0 {
+                                    new_start = 1;
+                                    break;
+                                }
+                                idx -= 1;
+                            }
+                        }
+                    }
+
+                    let line_count = content.lines().count();
+                    let new_end = new_end.min(line_count);
+
+                    LineSpec {
+                        path: spec.path.clone(),
+                        start: new_start,
+                        end: new_end,
+                    }
+                }
+                None => LineSpec { path: spec.path.clone(), start: spec.start, end: spec.end },
+            }
+        })
+        .collect()
 }
 
 pub fn extract_lines(

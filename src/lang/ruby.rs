@@ -88,6 +88,7 @@ impl LangSymbols for RubyImports {
                         visibility: vis,
                         parent,
                         signature: trimmed.to_owned(),
+                        comment: None,
                     });
                     scope_stack.push((name.to_owned(), "module"));
                 }
@@ -113,6 +114,7 @@ impl LangSymbols for RubyImports {
                         visibility: vis,
                         parent,
                         signature: trimmed.to_owned(),
+                        comment: None,
                     });
                     scope_stack.push((name.to_owned(), "class"));
                 }
@@ -134,6 +136,7 @@ impl LangSymbols for RubyImports {
                     visibility: vis,
                     parent,
                     signature: make_ruby_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -149,6 +152,7 @@ impl LangSymbols for RubyImports {
                         visibility: vis,
                         parent,
                         signature: trimmed.to_owned(),
+                        comment: None,
                     });
                 }
             }

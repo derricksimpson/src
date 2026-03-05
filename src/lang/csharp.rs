@@ -79,6 +79,7 @@ impl LangSymbols for CSharpImports {
                     visibility: vis,
                     parent: None,
                     signature: make_cs_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -93,6 +94,7 @@ impl LangSymbols for CSharpImports {
                     visibility: vis,
                     parent: None,
                     signature: make_cs_signature(trimmed),
+                    comment: None,
                 });
                 current_class = Some(name);
                 in_class = true;
@@ -111,6 +113,7 @@ impl LangSymbols for CSharpImports {
                     visibility: vis,
                     parent: None,
                     signature: make_cs_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -125,6 +128,7 @@ impl LangSymbols for CSharpImports {
                     visibility: vis,
                     parent: None,
                     signature: make_cs_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -139,6 +143,7 @@ impl LangSymbols for CSharpImports {
                     visibility: vis,
                     parent: None,
                     signature: make_cs_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -154,6 +159,7 @@ impl LangSymbols for CSharpImports {
                         visibility: vis,
                         parent: current_class.clone(),
                         signature: make_cs_signature(trimmed),
+                        comment: None,
                     });
                     continue;
                 }
@@ -170,6 +176,7 @@ impl LangSymbols for CSharpImports {
                         visibility: vis,
                         parent: current_class.clone(),
                         signature: make_cs_signature(trimmed),
+                        comment: None,
                     });
                 }
             }

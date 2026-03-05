@@ -101,6 +101,7 @@ impl LangSymbols for TypeScriptImports {
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -115,6 +116,7 @@ impl LangSymbols for TypeScriptImports {
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
+                    comment: None,
                 });
                 current_class = Some(name);
                 in_class = true;
@@ -133,6 +135,7 @@ impl LangSymbols for TypeScriptImports {
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -147,6 +150,7 @@ impl LangSymbols for TypeScriptImports {
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -161,6 +165,7 @@ impl LangSymbols for TypeScriptImports {
                     visibility: vis,
                     parent: None,
                     signature: make_ts_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -183,6 +188,7 @@ impl LangSymbols for TypeScriptImports {
                             visibility: vis,
                             parent: None,
                             signature: make_ts_signature(trimmed),
+                            comment: None,
                         });
                     }
                 }
@@ -199,6 +205,7 @@ impl LangSymbols for TypeScriptImports {
                         visibility: vis,
                         parent: None,
                         signature: make_ts_signature(trimmed),
+                        comment: None,
                     });
                 }
                 continue;
@@ -282,6 +289,7 @@ fn try_class_member(rest: &str, line_num: usize, class_name: &Option<String>) ->
                         visibility: None,
                         parent: class_name.clone(),
                         signature: rest.to_owned(),
+                        comment: None,
                     });
                 }
             }
@@ -299,6 +307,7 @@ fn try_class_member(rest: &str, line_num: usize, class_name: &Option<String>) ->
                 visibility: None,
                 parent: class_name.clone(),
                 signature: rest.to_owned(),
+                comment: None,
             });
         }
     }

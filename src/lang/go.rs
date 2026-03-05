@@ -182,6 +182,7 @@ impl LangSymbols for GoImports {
                         visibility: vis,
                         parent: None,
                         signature: trimmed.to_owned(),
+                        comment: None,
                     });
                 }
                 continue;
@@ -227,6 +228,7 @@ impl LangSymbols for GoImports {
                         visibility: vis,
                         parent: None,
                         signature: make_go_signature(trimmed),
+                        comment: None,
                     });
                 }
                 continue;
@@ -244,6 +246,7 @@ impl LangSymbols for GoImports {
                         visibility: vis,
                         parent: None,
                         signature: make_go_signature(trimmed),
+                        comment: None,
                     });
                 }
             }
@@ -279,6 +282,7 @@ fn parse_go_func(trimmed: &str, line_num: usize) -> Option<SymbolInfo> {
             visibility: vis,
             parent: receiver_type,
             signature: make_go_signature(trimmed),
+            comment: None,
         })
     } else {
         let paren = after_func.find('(')?;
@@ -295,6 +299,7 @@ fn parse_go_func(trimmed: &str, line_num: usize) -> Option<SymbolInfo> {
             visibility: vis,
             parent: None,
             signature: make_go_signature(trimmed),
+            comment: None,
         })
     }
 }
@@ -336,6 +341,7 @@ fn parse_go_type(trimmed: &str, line_num: usize) -> Option<SymbolInfo> {
         visibility: vis,
         parent: None,
         signature: make_go_signature(trimmed),
+        comment: None,
     })
 }
 

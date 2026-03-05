@@ -1,7 +1,7 @@
 use std::io::{self, Write, BufWriter};
 
 use crate::models::{
-    CountEntry, FileChunk, FileEntry, GraphEntry, LangStats, LargestFile,
+    CallersOutput, CountEntry, FileChunk, FileEntry, GraphEntry, LangStats, LargestFile,
     MetaInfo, OutputEnvelope, ScanResult, StatsOutput, SymbolFile, SymbolInfo,
 };
 
@@ -58,7 +58,10 @@ fn write_envelope_yaml(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Res
         write_graph(w, graph)?;
     }
     if let Some(ref symbols) = envelope.symbols {
-        write_symbols(w, symbols)?;
+        write_symbols(w, symbols, envelope.compact_symbols)?;
+    }
+    if let Some(ref callers_output) = envelope.callers {
+        write_callers(w, callers_output)?;
     }
     if let Some(ref counts) = envelope.counts {
         write_counts(w, counts)?;
@@ -97,7 +100,7 @@ fn write_meta(w: &mut impl Write, meta: &MetaInfo) -> io::Result<()> {
     Ok(())
 }
 
-fn write_symbols(w: &mut impl Write, symbol_files: &[SymbolFile]) -> io::Result<()> {
+fn write_symbols(w: &mut impl Write, symbol_files: &[SymbolFile], compact: bool) -> io::Result<()> {
     write!(w, "symbols:\n")?;
     for sf in symbol_files {
         write!(w, "- path: ")?;
@@ -114,47 +117,114 @@ fn write_symbols(w: &mut impl Write, symbol_files: &[SymbolFile]) -> io::Result<
             continue;
         }
 
-        let kind_order = &["fn", "method", "class", "struct", "enum", "trait",
-                           "interface", "type", "const", "var", "mod", "namespace", "export"];
-
-        for &kind in kind_order {
-            let group: Vec<&SymbolInfo> = sf.symbols.iter()
-                .filter(|s| s.kind == kind)
-                .collect();
-            if group.is_empty() {
-                continue;
+        if compact {
+            for sym in &sf.symbols {
+                write_symbol_entry(w, sym, true)?;
             }
+        } else {
+            let kind_order = &["fn", "method", "class", "struct", "enum", "trait",
+                               "interface", "type", "const", "var", "mod", "namespace", "export"];
 
-            let label = match kind {
-                "fn" => "funcs",
-                "method" => "methods",
-                "class" => "classes",
-                "struct" => "structs",
-                "enum" => "enums",
-                "trait" => "traits",
-                "interface" => "interfaces",
-                "type" => "types",
-                "const" => "consts",
-                "var" => "vars",
-                "mod" => "mods",
-                "namespace" => "namespaces",
-                "export" => "exports",
-                _ => kind,
-            };
+            for &kind in kind_order {
+                let group: Vec<&SymbolInfo> = sf.symbols.iter()
+                    .filter(|s| s.kind == kind)
+                    .collect();
+                if group.is_empty() {
+                    continue;
+                }
 
-            write!(w, "  {}:\n", label)?;
-            for sym in &group {
-                write_symbol_compact(w, sym)?;
+                let label = match kind {
+                    "fn" => "funcs",
+                    "method" => "methods",
+                    "class" => "classes",
+                    "struct" => "structs",
+                    "enum" => "enums",
+                    "trait" => "traits",
+                    "interface" => "interfaces",
+                    "type" => "types",
+                    "const" => "consts",
+                    "var" => "vars",
+                    "mod" => "mods",
+                    "namespace" => "namespaces",
+                    "export" => "exports",
+                    _ => kind,
+                };
+
+                write!(w, "  {}:\n", label)?;
+                for sym in &group {
+                    write_symbol_entry(w, sym, false)?;
+                }
             }
         }
     }
     Ok(())
 }
 
-fn write_symbol_compact(w: &mut impl Write, sym: &SymbolInfo) -> io::Result<()> {
-    write!(w, "  - ")?;
-    write_inline_string(w, &sym.signature)?;
-    write!(w, " :{}:{}\n", sym.line, sym.end_line)?;
+fn write_symbol_entry(w: &mut impl Write, sym: &SymbolInfo, compact: bool) -> io::Result<()> {
+    if compact {
+        write!(w, "  - {} {} :{}:{}\n", sym.kind, sym.name, sym.line, sym.end_line)?;
+    } else {
+        write!(w, "  - ")?;
+        write_inline_string(w, &sym.signature)?;
+        write!(w, " :{}:{}\n", sym.line, sym.end_line)?;
+    }
+    if let Some(ref comment) = sym.comment {
+        write!(w, "    comment: ")?;
+        if comment.contains('\n') {
+            write!(w, "|\n")?;
+            for line in comment.lines() {
+                write!(w, "      {}\n", line)?;
+            }
+        } else {
+            write_inline_string(w, comment)?;
+            write!(w, "\n")?;
+        }
+    }
+    Ok(())
+}
+
+fn write_callers(w: &mut impl Write, output: &CallersOutput) -> io::Result<()> {
+    if output.declarations.is_empty() {
+        write!(w, "declaration: null\n")?;
+    } else if output.declarations.len() == 1 {
+        let d = &output.declarations[0];
+        write!(w, "declaration:\n")?;
+        write!(w, "  path: ")?;
+        write_inline_string(w, &d.path)?;
+        write!(w, "\n")?;
+        write!(w, "  line: {}\n", d.line)?;
+        write!(w, "  signature: ")?;
+        write_inline_string(w, &d.signature)?;
+        write!(w, "\n")?;
+    } else {
+        write!(w, "declarations:\n")?;
+        for d in &output.declarations {
+            write!(w, "- path: ")?;
+            write_inline_string(w, &d.path)?;
+            write!(w, "\n")?;
+            write!(w, "  line: {}\n", d.line)?;
+            write!(w, "  signature: ")?;
+            write_inline_string(w, &d.signature)?;
+            write!(w, "\n")?;
+        }
+    }
+    if output.files.is_empty() {
+        write!(w, "callers: []\n")?;
+    } else {
+        write!(w, "callers:\n")?;
+        for cf in &output.files {
+            write!(w, "- path: ")?;
+            write_inline_string(w, &cf.path)?;
+            write!(w, "\n")?;
+            write!(w, "  sites:\n")?;
+            for site in &cf.sites {
+                write!(w, "  - line: {}\n", site.line)?;
+                write!(w, "    content: ")?;
+                write_inline_string(w, &site.content)?;
+                write!(w, "\n")?;
+            }
+        }
+    }
     Ok(())
 }
 
@@ -502,7 +572,11 @@ fn write_envelope_json(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Res
     }
     if let Some(ref symbols) = envelope.symbols {
         json_comma(w, &mut first)?;
-        write_symbols_json(w, symbols)?;
+        write_symbols_json(w, symbols, envelope.compact_symbols)?;
+    }
+    if let Some(ref callers_output) = envelope.callers {
+        json_comma(w, &mut first)?;
+        write_callers_json(w, callers_output)?;
     }
     if let Some(ref counts) = envelope.counts {
         json_comma(w, &mut first)?;
@@ -593,7 +667,7 @@ fn write_graph_json(w: &mut impl Write, graph: &[GraphEntry]) -> io::Result<()> 
     write!(w, "]")
 }
 
-fn write_symbols_json(w: &mut impl Write, symbol_files: &[SymbolFile]) -> io::Result<()> {
+fn write_symbols_json(w: &mut impl Write, symbol_files: &[SymbolFile], compact: bool) -> io::Result<()> {
     write!(w, "\"symbols\":[")?;
     for (i, sf) in symbol_files.iter().enumerate() {
         if i > 0 { write!(w, ",")?; }
@@ -607,16 +681,54 @@ fn write_symbols_json(w: &mut impl Write, symbol_files: &[SymbolFile]) -> io::Re
             write!(w, ",\"name\":")?;
             write_json_string(w, &sym.name)?;
             write!(w, ",\"line\":{},\"endLine\":{}", sym.line, sym.end_line)?;
-            if let Some(vis) = sym.visibility {
-                write!(w, ",\"visibility\":")?;
-                write_json_string(w, vis)?;
+            if !compact {
+                if let Some(vis) = sym.visibility {
+                    write!(w, ",\"visibility\":")?;
+                    write_json_string(w, vis)?;
+                }
+                if let Some(ref parent) = sym.parent {
+                    write!(w, ",\"parent\":")?;
+                    write_json_string(w, parent)?;
+                }
+                write!(w, ",\"signature\":")?;
+                write_json_string(w, &sym.signature)?;
             }
-            if let Some(ref parent) = sym.parent {
-                write!(w, ",\"parent\":")?;
-                write_json_string(w, parent)?;
+            if let Some(ref comment) = sym.comment {
+                write!(w, ",\"comment\":")?;
+                write_json_string(w, comment)?;
             }
-            write!(w, ",\"signature\":")?;
-            write_json_string(w, &sym.signature)?;
+            write!(w, "}}")?;
+        }
+        write!(w, "]}}")?;
+    }
+    write!(w, "]")
+}
+
+fn write_callers_json(w: &mut impl Write, output: &CallersOutput) -> io::Result<()> {
+    if output.declarations.is_empty() {
+        write!(w, "\"declaration\":null")?;
+    } else {
+        write!(w, "\"declarations\":[")?;
+        for (i, d) in output.declarations.iter().enumerate() {
+            if i > 0 { write!(w, ",")?; }
+            write!(w, "{{\"path\":")?;
+            write_json_string(w, &d.path)?;
+            write!(w, ",\"line\":{},\"signature\":", d.line)?;
+            write_json_string(w, &d.signature)?;
+            write!(w, "}}")?;
+        }
+        write!(w, "]")?;
+    }
+    write!(w, ",\"callers\":[")?;
+    for (i, cf) in output.files.iter().enumerate() {
+        if i > 0 { write!(w, ",")?; }
+        write!(w, "{{\"path\":")?;
+        write_json_string(w, &cf.path)?;
+        write!(w, ",\"sites\":[")?;
+        for (j, site) in cf.sites.iter().enumerate() {
+            if j > 0 { write!(w, ",")?; }
+            write!(w, "{{\"line\":{},\"content\":", site.line)?;
+            write_json_string(w, &site.content)?;
             write!(w, "}}")?;
         }
         write!(w, "]}}")?;
@@ -817,6 +929,7 @@ mod tests {
                     visibility: Some("pub"),
                     parent: None,
                     signature: "pub fn main() {".to_owned(),
+                    comment: None,
                 }],
                 error: None,
             }]),
@@ -1097,6 +1210,7 @@ mod tests {
                     visibility: Some("pub"),
                     parent: None,
                     signature: "pub fn main() {".to_owned(),
+                    comment: None,
                 }],
                 error: None,
             }]),

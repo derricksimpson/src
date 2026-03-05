@@ -201,6 +201,7 @@ impl LangSymbols for PythonImports {
                         visibility: None,
                         parent: None,
                         signature: make_python_signature(trimmed),
+                        comment: None,
                     });
                 }
                 continue;
@@ -234,6 +235,7 @@ impl LangSymbols for PythonImports {
                         visibility: None,
                         parent,
                         signature: make_python_signature(trimmed),
+                        comment: None,
                     });
                 }
                 continue;
@@ -249,6 +251,7 @@ impl LangSymbols for PythonImports {
                         visibility: None,
                         parent: None,
                         signature: trimmed.to_owned(),
+                        comment: None,
                     });
                 }
             }

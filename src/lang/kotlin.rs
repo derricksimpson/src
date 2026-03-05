@@ -91,6 +91,7 @@ impl LangSymbols for KotlinImports {
                     visibility: vis,
                     parent: None,
                     signature: common::make_signature_brace(trimmed),
+                    comment: None,
                 });
                 if trimmed.contains('{') {
                     current_class = Some(name);
@@ -115,6 +116,7 @@ impl LangSymbols for KotlinImports {
                     visibility: vis,
                     parent: current_class.clone(),
                     signature: common::make_signature_brace(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -135,6 +137,7 @@ impl LangSymbols for KotlinImports {
                         visibility: vis,
                         parent: if in_class { current_class.clone() } else { None },
                         signature: common::make_signature_brace(trimmed),
+                        comment: None,
                     });
                     continue;
                 }
@@ -151,6 +154,7 @@ impl LangSymbols for KotlinImports {
                         visibility: vis,
                         parent: current_class.clone(),
                         signature: trimmed.to_owned(),
+                        comment: None,
                     });
                     continue;
                 }

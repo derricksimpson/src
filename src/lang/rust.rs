@@ -115,6 +115,7 @@ impl LangSymbols for RustImports {
                         visibility: vis,
                         parent: current_parent.clone(),
                         signature: make_signature(trimmed),
+                        comment: None,
                     });
                 }
                 continue;
@@ -130,6 +131,7 @@ impl LangSymbols for RustImports {
                     visibility: vis,
                     parent: None,
                     signature: make_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -144,6 +146,7 @@ impl LangSymbols for RustImports {
                     visibility: vis,
                     parent: None,
                     signature: make_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -158,6 +161,7 @@ impl LangSymbols for RustImports {
                     visibility: vis,
                     parent: None,
                     signature: make_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -172,6 +176,7 @@ impl LangSymbols for RustImports {
                     visibility: vis,
                     parent: None,
                     signature: make_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -186,6 +191,7 @@ impl LangSymbols for RustImports {
                     visibility: vis,
                     parent: current_parent.clone(),
                     signature: make_signature(trimmed),
+                    comment: None,
                 });
                 continue;
             }
@@ -200,6 +206,7 @@ impl LangSymbols for RustImports {
                         visibility: vis,
                         parent: None,
                         signature: make_signature(trimmed),
+                        comment: None,
                     });
                 }
             }

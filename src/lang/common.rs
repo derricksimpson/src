@@ -121,6 +121,125 @@ pub fn try_extract_keyword_name(rest: &str, keyword: &str) -> Option<String> {
     if name.is_empty() { None } else { Some(name.to_owned()) }
 }
 
+pub fn extract_preceding_comment(lines: &[&str], symbol_line_idx: usize) -> Option<String> {
+    if symbol_line_idx == 0 {
+        return None;
+    }
+
+    let mut comment_lines: Vec<String> = Vec::new();
+    let mut idx = symbol_line_idx - 1;
+    let mut in_block_comment = false;
+
+    loop {
+        let trimmed = lines[idx].trim();
+
+        if trimmed.is_empty() && !in_block_comment {
+            break;
+        }
+
+        if !in_block_comment && (trimmed == "*/" || trimmed.ends_with("*/")) {
+            in_block_comment = true;
+            let content = trimmed.trim_end_matches("*/").trim_end();
+            if !content.is_empty() && content != "*" {
+                let content = content.trim_start_matches('*').trim();
+                if !content.is_empty() {
+                    comment_lines.push(content.to_owned());
+                }
+            }
+        } else if in_block_comment {
+            if trimmed.starts_with("/**") || trimmed.starts_with("/*") {
+                let inner = trimmed.trim_start_matches("/**").trim_start_matches("/*").trim();
+                if !inner.is_empty() {
+                    comment_lines.push(inner.to_owned());
+                }
+                break;
+            } else {
+                let stripped = trimmed.trim_start_matches('*');
+                let stripped = if stripped.starts_with(' ') { &stripped[1..] } else { stripped };
+                if !stripped.is_empty() || !comment_lines.is_empty() {
+                    comment_lines.push(stripped.to_owned());
+                }
+            }
+        } else if trimmed.starts_with("///") || trimmed.starts_with("//!") {
+            let stripped = trimmed.trim_start_matches("///")
+                .trim_start_matches("//!");
+            let stripped = if stripped.starts_with(' ') { &stripped[1..] } else { stripped };
+            comment_lines.push(stripped.to_owned());
+        } else if trimmed.starts_with("//") {
+            let stripped = &trimmed[2..];
+            let stripped = if stripped.starts_with(' ') { &stripped[1..] } else { stripped };
+            comment_lines.push(stripped.to_owned());
+        } else if trimmed.starts_with('#') && !trimmed.starts_with("#[") {
+            let stripped = &trimmed[1..];
+            let stripped = if stripped.starts_with(' ') { &stripped[1..] } else { stripped };
+            comment_lines.push(stripped.to_owned());
+        } else {
+            break;
+        }
+
+        if idx == 0 {
+            break;
+        }
+        idx -= 1;
+    }
+
+    if comment_lines.is_empty() {
+        return None;
+    }
+
+    comment_lines.reverse();
+    Some(comment_lines.join("\n"))
+}
+
+pub fn extract_docstring_after(lines: &[&str], symbol_line_idx: usize) -> Option<String> {
+    let mut idx = symbol_line_idx + 1;
+    if idx >= lines.len() {
+        return None;
+    }
+
+    let trimmed = lines[idx].trim();
+
+    let delimiter = if trimmed.starts_with("\"\"\"") {
+        "\"\"\""
+    } else if trimmed.starts_with("'''") {
+        "'''"
+    } else {
+        return None;
+    };
+
+    let after_open = &trimmed[3..];
+    if let Some(close_pos) = after_open.find(delimiter) {
+        let content = after_open[..close_pos].trim();
+        return if content.is_empty() { None } else { Some(content.to_owned()) };
+    }
+
+    let mut doc_lines: Vec<String> = Vec::new();
+    let first_content = after_open.trim();
+    if !first_content.is_empty() {
+        doc_lines.push(first_content.to_owned());
+    }
+
+    idx += 1;
+    while idx < lines.len() {
+        let line = lines[idx].trim();
+        if line.contains(delimiter) {
+            let before_close = line.split(delimiter).next().unwrap_or("").trim();
+            if !before_close.is_empty() {
+                doc_lines.push(before_close.to_owned());
+            }
+            break;
+        }
+        doc_lines.push(line.to_owned());
+        idx += 1;
+    }
+
+    if doc_lines.is_empty() {
+        None
+    } else {
+        Some(doc_lines.join("\n"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -303,5 +422,179 @@ mod tests {
         assert!(ct.is_comment("inner line", "//"));
         assert!(ct.is_comment("*/", "//"));
         assert!(!ct.is_comment("code after", "//"));
+    }
+
+    // ── extract_preceding_comment ──
+
+    #[test]
+    fn preceding_rust_doc_comment() {
+        let lines = vec![
+            "/// Processes an input file.",
+            "/// Returns the result.",
+            "pub fn process_file() {}",
+        ];
+        let result = extract_preceding_comment(&lines, 2);
+        assert!(result.is_some());
+        let c = result.unwrap();
+        assert!(c.contains("Processes an input file."));
+        assert!(c.contains("Returns the result."));
+    }
+
+    #[test]
+    fn preceding_slash_slash_comment() {
+        let lines = vec![
+            "// Helper function for testing",
+            "fn helper() {}",
+        ];
+        let result = extract_preceding_comment(&lines, 1);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Helper function for testing"));
+    }
+
+    #[test]
+    fn preceding_hash_comment() {
+        let lines = vec![
+            "# Compute the sum of two numbers.",
+            "def add(a, b):",
+        ];
+        let result = extract_preceding_comment(&lines, 1);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Compute the sum"));
+    }
+
+    #[test]
+    fn preceding_no_comment() {
+        let lines = vec![
+            "let x = 42;",
+            "fn foo() {}",
+        ];
+        let result = extract_preceding_comment(&lines, 1);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn preceding_blank_line_stops() {
+        let lines = vec![
+            "/// Old comment",
+            "",
+            "fn foo() {}",
+        ];
+        let result = extract_preceding_comment(&lines, 2);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn preceding_at_file_start() {
+        let lines = vec![
+            "/// First line comment.",
+            "fn foo() {}",
+        ];
+        let result = extract_preceding_comment(&lines, 1);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("First line comment."));
+    }
+
+    #[test]
+    fn preceding_first_line_no_comment() {
+        let lines = vec!["fn foo() {}"];
+        let result = extract_preceding_comment(&lines, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn preceding_star_prefixed_block() {
+        let lines = vec![
+            "/**",
+            " * A block doc comment.",
+            " * Second line.",
+            " */",
+            "function foo() {}",
+        ];
+        let result = extract_preceding_comment(&lines, 4);
+        assert!(result.is_some());
+        let c = result.unwrap();
+        assert!(c.contains("Second line."));
+    }
+
+    #[test]
+    fn preceding_rust_bang_comment() {
+        let lines = vec![
+            "//! Module-level doc comment.",
+            "mod my_module;",
+        ];
+        let result = extract_preceding_comment(&lines, 1);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Module-level doc comment."));
+    }
+
+    #[test]
+    fn preceding_skips_rust_attribute() {
+        let lines = vec![
+            "/// A documented function.",
+            "#[inline]",
+            "fn foo() {}",
+        ];
+        let result = extract_preceding_comment(&lines, 2);
+        assert!(result.is_none());
+    }
+
+    // ── extract_docstring_after ──
+
+    #[test]
+    fn docstring_single_line() {
+        let lines = vec![
+            "def foo():",
+            "    \"\"\"A short docstring.\"\"\"",
+            "    pass",
+        ];
+        let result = extract_docstring_after(&lines, 0);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("A short docstring."));
+    }
+
+    #[test]
+    fn docstring_multi_line() {
+        let lines = vec![
+            "class Foo:",
+            "    \"\"\"",
+            "    A multi-line",
+            "    docstring.",
+            "    \"\"\"",
+            "    pass",
+        ];
+        let result = extract_docstring_after(&lines, 0);
+        assert!(result.is_some());
+        let c = result.unwrap();
+        assert!(c.contains("A multi-line"));
+        assert!(c.contains("docstring."));
+    }
+
+    #[test]
+    fn docstring_single_quotes() {
+        let lines = vec![
+            "def bar():",
+            "    '''Single quote docstring.'''",
+            "    pass",
+        ];
+        let result = extract_docstring_after(&lines, 0);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("Single quote docstring."));
+    }
+
+    #[test]
+    fn no_docstring() {
+        let lines = vec![
+            "def baz():",
+            "    return True",
+        ];
+        let result = extract_docstring_after(&lines, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn docstring_at_end_of_file() {
+        let lines = vec!["def foo():"];
+        let result = extract_docstring_after(&lines, 0);
+        assert!(result.is_none());
     }
 }

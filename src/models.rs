@@ -71,6 +71,27 @@ pub struct StatsOutput {
     pub largest: Vec<LargestFile>,
 }
 
+pub struct CallerEntry {
+    pub line: usize,
+    pub content: String,
+}
+
+pub struct CallerFile {
+    pub path: String,
+    pub sites: Vec<CallerEntry>,
+}
+
+pub struct CallerDeclaration {
+    pub path: String,
+    pub line: usize,
+    pub signature: String,
+}
+
+pub struct CallersOutput {
+    pub declarations: Vec<CallerDeclaration>,
+    pub files: Vec<CallerFile>,
+}
+
 #[derive(Default)]
 pub struct OutputEnvelope {
     pub meta: Option<MetaInfo>,
@@ -80,6 +101,8 @@ pub struct OutputEnvelope {
     pub symbols: Option<Vec<SymbolFile>>,
     pub counts: Option<Vec<CountEntry>>,
     pub stats: Option<StatsOutput>,
+    pub callers: Option<CallersOutput>,
+    pub compact_symbols: bool,
     pub errors: Option<Vec<String>>,
     pub error: Option<String>,
 }
