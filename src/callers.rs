@@ -14,9 +14,10 @@ pub fn find_callers(
     root: &Path,
     name: &str,
     is_regex: bool,
+    include_tests: bool,
     cancelled: &AtomicBool,
 ) -> Result<CallersOutput, String> {
-    let symbol_files = symbols::extract_symbols(file_paths, root, cancelled, false);
+    let symbol_files = symbols::extract_symbols(file_paths, root, cancelled, false, include_tests);
 
     let mut declarations: Vec<CallerDeclaration> = Vec::new();
     for sf in &symbol_files {

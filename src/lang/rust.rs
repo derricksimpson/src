@@ -55,12 +55,25 @@ impl LangSymbols for RustImports {
     }
 
     fn extract_symbols(&self, content: &str) -> Vec<SymbolInfo> {
+        extract_symbols_internal(content, true)
+    }
+
+    fn extract_symbols_with_tests(&self, content: &str, include_tests: bool) -> Vec<SymbolInfo> {
+        extract_symbols_internal(content, include_tests)
+    }
+}
+
+fn extract_symbols_internal(content: &str, include_tests: bool) -> Vec<SymbolInfo> {
         let lines: Vec<&str> = content.lines().collect();
         let mut symbols = Vec::new();
         let mut current_parent: Option<String> = None;
         let mut impl_brace_depth: i32 = 0;
         let mut in_impl = false;
         let mut comment_tracker = CommentTracker::new();
+        let mut brace_depth: i32 = 0;
+        let mut test_scope_exit_depths: Vec<i32> = Vec::new();
+        let mut pending_cfg_test: bool = false;
+        let mut pending_test_fn: bool = false;
 
         for (line_idx, line) in lines.iter().enumerate() {
             let trimmed = line.trim();
@@ -70,14 +83,62 @@ impl LangSymbols for RustImports {
                 continue;
             }
 
+            if !include_tests && !test_scope_exit_depths.is_empty() {
+                common::update_brace_depth(trimmed, &mut brace_depth);
+                while let Some(&exit_depth) = test_scope_exit_depths.last() {
+                    if brace_depth <= exit_depth {
+                        test_scope_exit_depths.pop();
+                    } else {
+                        break;
+                    }
+                }
+                continue;
+            }
+
+            if trimmed.starts_with("#[") {
+                if !include_tests {
+                    if is_cfg_test_attribute(trimmed) {
+                        pending_cfg_test = true;
+                    }
+                    if is_test_function_attribute(trimmed) {
+                        pending_test_fn = true;
+                    }
+                }
+                continue;
+            }
+
+            let brace_depth_before = brace_depth;
             let (vis, rest) = extract_visibility(trimmed);
 
-            if rest.starts_with("impl ") || rest.starts_with("impl<") {
-                let type_name = extract_impl_type(rest);
-                if let Some(name) = type_name {
-                    current_parent = Some(name);
-                    in_impl = true;
-                    impl_brace_depth = 0;
+            let should_skip_due_to_test_attr = !include_tests && (pending_cfg_test || pending_test_fn) && looks_like_declaration(rest);
+            if should_skip_due_to_test_attr && trimmed.contains('{') && looks_like_block_item(rest) {
+                test_scope_exit_depths.push(brace_depth_before);
+            }
+
+            if !should_skip_due_to_test_attr {
+                let mut entered_impl_this_line = false;
+                if rest.starts_with("impl ") || rest.starts_with("impl<") {
+                    let type_name = extract_impl_type(rest);
+                    if let Some(name) = type_name {
+                        current_parent = Some(name);
+                        in_impl = true;
+                        impl_brace_depth = 0;
+                        for c in trimmed.chars() {
+                            match c {
+                                '{' => impl_brace_depth += 1,
+                                '}' => impl_brace_depth -= 1,
+                                _ => {}
+                            }
+                        }
+                        entered_impl_this_line = true;
+                        if impl_brace_depth <= 0 {
+                            current_parent = None;
+                            in_impl = false;
+                        }
+                    }
+                }
+
+                if in_impl && !entered_impl_this_line {
                     for c in trimmed.chars() {
                         match c {
                             '{' => impl_brace_depth += 1,
@@ -85,30 +146,79 @@ impl LangSymbols for RustImports {
                             _ => {}
                         }
                     }
-                    continue;
-                }
-            }
-
-            if in_impl {
-                for c in trimmed.chars() {
-                    match c {
-                        '{' => impl_brace_depth += 1,
-                        '}' => impl_brace_depth -= 1,
-                        _ => {}
+                    if impl_brace_depth <= 0 {
+                        current_parent = None;
+                        in_impl = false;
                     }
                 }
-                if impl_brace_depth <= 0 {
-                    current_parent = None;
-                    in_impl = false;
-                }
-            }
 
-            if rest.starts_with("fn ") {
-                if let Some(name) = extract_name_before_paren(rest, "fn ") {
-                    let kind = if current_parent.is_some() { "method" } else { "fn" };
+                if rest.starts_with("fn ") {
+                    if let Some(name) = extract_name_before_paren(rest, "fn ") {
+                        let kind = if current_parent.is_some() { "method" } else { "fn" };
+                        let end_line = find_brace_end(&lines, line_idx);
+                        symbols.push(SymbolInfo {
+                            kind,
+                            name,
+                            line: line_num,
+                            end_line,
+                            visibility: vis,
+                            parent: current_parent.clone(),
+                            signature: make_signature(trimmed),
+                            comment: None,
+                        });
+                    }
+                } else if let Some(name) = try_extract_keyword(rest, "struct ") {
                     let end_line = find_brace_end(&lines, line_idx);
                     symbols.push(SymbolInfo {
-                        kind,
+                        kind: "struct",
+                        name,
+                        line: line_num,
+                        end_line,
+                        visibility: vis,
+                        parent: None,
+                        signature: make_signature(trimmed),
+                        comment: None,
+                    });
+                } else if let Some(name) = try_extract_keyword(rest, "enum ") {
+                    let end_line = find_brace_end(&lines, line_idx);
+                    symbols.push(SymbolInfo {
+                        kind: "enum",
+                        name,
+                        line: line_num,
+                        end_line,
+                        visibility: vis,
+                        parent: None,
+                        signature: make_signature(trimmed),
+                        comment: None,
+                    });
+                } else if let Some(name) = try_extract_keyword(rest, "trait ") {
+                    let end_line = find_brace_end(&lines, line_idx);
+                    symbols.push(SymbolInfo {
+                        kind: "trait",
+                        name,
+                        line: line_num,
+                        end_line,
+                        visibility: vis,
+                        parent: None,
+                        signature: make_signature(trimmed),
+                        comment: None,
+                    });
+                } else if let Some(name) = try_extract_keyword(rest, "type ") {
+                    let end_line = find_semicolon_or_same(&lines, line_idx);
+                    symbols.push(SymbolInfo {
+                        kind: "type",
+                        name,
+                        line: line_num,
+                        end_line,
+                        visibility: vis,
+                        parent: None,
+                        signature: make_signature(trimmed),
+                        comment: None,
+                    });
+                } else if let Some(name) = try_extract_keyword(rest, "const ") {
+                    let end_line = find_semicolon_or_same(&lines, line_idx);
+                    symbols.push(SymbolInfo {
+                        kind: "const",
                         name,
                         line: line_num,
                         end_line,
@@ -117,103 +227,74 @@ impl LangSymbols for RustImports {
                         signature: make_signature(trimmed),
                         comment: None,
                     });
+                } else if rest.starts_with("mod ") {
+                    if let Some(module_name) = parse_mod_decl(&rest[4..]) {
+                        symbols.push(SymbolInfo {
+                            kind: "mod",
+                            name: module_name.to_owned(),
+                            line: line_num,
+                            end_line: line_num,
+                            visibility: vis,
+                            parent: None,
+                            signature: make_signature(trimmed),
+                            comment: None,
+                        });
+                    }
                 }
-                continue;
             }
 
-            if let Some(name) = try_extract_keyword(rest, "struct ") {
-                let end_line = find_brace_end(&lines, line_idx);
-                symbols.push(SymbolInfo {
-                    kind: "struct",
-                    name,
-                    line: line_num,
-                    end_line,
-                    visibility: vis,
-                    parent: None,
-                    signature: make_signature(trimmed),
-                    comment: None,
-                });
-                continue;
-            }
+            pending_cfg_test = false;
+            pending_test_fn = false;
 
-            if let Some(name) = try_extract_keyword(rest, "enum ") {
-                let end_line = find_brace_end(&lines, line_idx);
-                symbols.push(SymbolInfo {
-                    kind: "enum",
-                    name,
-                    line: line_num,
-                    end_line,
-                    visibility: vis,
-                    parent: None,
-                    signature: make_signature(trimmed),
-                    comment: None,
-                });
-                continue;
-            }
-
-            if let Some(name) = try_extract_keyword(rest, "trait ") {
-                let end_line = find_brace_end(&lines, line_idx);
-                symbols.push(SymbolInfo {
-                    kind: "trait",
-                    name,
-                    line: line_num,
-                    end_line,
-                    visibility: vis,
-                    parent: None,
-                    signature: make_signature(trimmed),
-                    comment: None,
-                });
-                continue;
-            }
-
-            if let Some(name) = try_extract_keyword(rest, "type ") {
-                let end_line = find_semicolon_or_same(&lines, line_idx);
-                symbols.push(SymbolInfo {
-                    kind: "type",
-                    name,
-                    line: line_num,
-                    end_line,
-                    visibility: vis,
-                    parent: None,
-                    signature: make_signature(trimmed),
-                    comment: None,
-                });
-                continue;
-            }
-
-            if let Some(name) = try_extract_keyword(rest, "const ") {
-                let end_line = find_semicolon_or_same(&lines, line_idx);
-                symbols.push(SymbolInfo {
-                    kind: "const",
-                    name,
-                    line: line_num,
-                    end_line,
-                    visibility: vis,
-                    parent: current_parent.clone(),
-                    signature: make_signature(trimmed),
-                    comment: None,
-                });
-                continue;
-            }
-
-            if rest.starts_with("mod ") {
-                if let Some(module_name) = parse_mod_decl(&rest[4..]) {
-                    symbols.push(SymbolInfo {
-                        kind: "mod",
-                        name: module_name.to_owned(),
-                        line: line_num,
-                        end_line: line_num,
-                        visibility: vis,
-                        parent: None,
-                        signature: make_signature(trimmed),
-                        comment: None,
-                    });
+            common::update_brace_depth(trimmed, &mut brace_depth);
+            while let Some(&exit_depth) = test_scope_exit_depths.last() {
+                if brace_depth <= exit_depth {
+                    test_scope_exit_depths.pop();
+                } else {
+                    break;
                 }
             }
         }
 
         symbols
-    }
+}
+
+fn looks_like_declaration(rest: &str) -> bool {
+    rest.starts_with("fn ")
+        || rest.starts_with("struct ")
+        || rest.starts_with("enum ")
+        || rest.starts_with("trait ")
+        || rest.starts_with("type ")
+        || rest.starts_with("const ")
+        || rest.starts_with("mod ")
+        || rest.starts_with("impl ")
+        || rest.starts_with("impl<")
+}
+
+fn looks_like_block_item(rest: &str) -> bool {
+    rest.starts_with("fn ")
+        || rest.starts_with("struct ")
+        || rest.starts_with("enum ")
+        || rest.starts_with("trait ")
+        || rest.starts_with("mod ")
+        || rest.starts_with("impl ")
+        || rest.starts_with("impl<")
+}
+
+fn is_cfg_test_attribute(trimmed: &str) -> bool {
+    trimmed.contains("cfg(test")
+        || trimmed.contains("cfg(any(test")
+        || trimmed.contains("cfg(all(test")
+        || trimmed.contains("cfg_attr(test")
+        || trimmed.contains("cfg_attr(any(test")
+        || trimmed.contains("cfg_attr(all(test")
+}
+
+fn is_test_function_attribute(trimmed: &str) -> bool {
+    trimmed == "#[test]"
+        || trimmed.starts_with("#[test(")
+        || trimmed.contains("::test]")
+        || trimmed.contains("::test(")
 }
 
 fn extract_visibility(trimmed: &str) -> (Option<&'static str>, &str) {
@@ -346,6 +427,10 @@ mod tests {
 
     fn extract_syms(content: &str) -> Vec<SymbolInfo> {
         <RustImports as LangSymbols>::extract_symbols(&RustImports, content)
+    }
+
+    fn extract_syms_without_tests(content: &str) -> Vec<SymbolInfo> {
+        <RustImports as LangSymbols>::extract_symbols_with_tests(&RustImports, content, false)
     }
 
     // ── Import Tests ──
@@ -975,5 +1060,59 @@ impl Limits {
         let content = "pub struct MyStruct<T> {\n    field: T,\n}\n";
         let syms = extract_syms(content);
         assert!(syms[0].signature.starts_with("pub struct MyStruct"));
+    }
+
+    // ── Test filtering (inline Rust tests) ──
+
+    #[test]
+    fn cfg_test_module_is_excluded_when_include_tests_false() {
+        let content = r#"pub fn real() {}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unit_test() {}
+
+    fn helper() {}
+}
+
+pub fn after() {}
+"#;
+        let syms = extract_syms_without_tests(content);
+        assert!(syms.iter().any(|s| s.name == "real"));
+        assert!(syms.iter().any(|s| s.name == "after"));
+        assert!(!syms.iter().any(|s| s.name == "unit_test"));
+        assert!(!syms.iter().any(|s| s.name == "helper"));
+    }
+
+    #[test]
+    fn cfg_test_impl_block_is_excluded_when_include_tests_false() {
+        let content = r#"pub struct Foo;
+
+#[cfg(test)]
+impl Foo {
+    pub fn test_only_method(&self) {}
+}
+
+impl Foo {
+    pub fn real_method(&self) {}
+}
+"#;
+        let syms = extract_syms_without_tests(content);
+        assert!(syms.iter().any(|s| s.name == "Foo" && s.kind == "struct"));
+        assert!(syms.iter().any(|s| s.name == "real_method"));
+        assert!(!syms.iter().any(|s| s.name == "test_only_method"));
+    }
+
+    #[test]
+    fn test_attribute_fn_is_excluded_when_include_tests_false() {
+        let content = r#"#[test]
+fn unit_test() {}
+
+fn real() {}
+"#;
+        let syms = extract_syms_without_tests(content);
+        assert!(syms.iter().any(|s| s.name == "real"));
+        assert!(!syms.iter().any(|s| s.name == "unit_test"));
     }
 }

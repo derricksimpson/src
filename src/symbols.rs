@@ -15,6 +15,7 @@ pub fn extract_symbols(
     root: &Path,
     cancelled: &AtomicBool,
     with_comments: bool,
+    include_tests: bool,
 ) -> Vec<SymbolFile> {
     let mut results: Vec<SymbolFile> = file_paths
         .par_iter()
@@ -22,7 +23,7 @@ pub fn extract_symbols(
             if cancelled.load(Ordering::Relaxed) {
                 return None;
             }
-            process_file(file_path, root, with_comments)
+            process_file(file_path, root, with_comments, include_tests)
         })
         .collect();
 
@@ -30,7 +31,7 @@ pub fn extract_symbols(
     results
 }
 
-fn process_file(file_path: &str, root: &Path, with_comments: bool) -> Option<SymbolFile> {
+fn process_file(file_path: &str, root: &Path, with_comments: bool, include_tests: bool) -> Option<SymbolFile> {
     let path = Path::new(file_path);
     let relative = path_helper::normalized_relative(root, path);
 
@@ -49,7 +50,7 @@ fn process_file(file_path: &str, root: &Path, with_comments: bool) -> Option<Sym
         }
     };
 
-    let mut symbols = handler.extract_symbols(&content);
+    let mut symbols = handler.extract_symbols_with_tests(&content, include_tests);
 
     if with_comments && !symbols.is_empty() {
         let lines: Vec<&str> = content.lines().collect();

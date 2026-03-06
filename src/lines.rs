@@ -70,7 +70,7 @@ pub fn expand_line_specs(
                 _ => return LineSpec { path: spec.path.clone(), start: spec.start, end: spec.end },
             };
 
-            let symbols = handler.extract_symbols(&content);
+            let symbols = handler.extract_symbols_with_tests(&content, true);
 
             let enclosing = symbols.iter().find(|sym| {
                 spec.start >= sym.line && spec.start <= sym.end_line

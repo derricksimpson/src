@@ -453,7 +453,7 @@ fn execute_callers(
         return 2;
     }
 
-    let callers_output = match callers::find_callers(&files, root, name, args.is_regex, cancelled) {
+    let callers_output = match callers::find_callers(&files, root, name, args.is_regex, args.with_tests, cancelled) {
         Ok(c) => c,
         Err(e) => {
             let envelope = OutputEnvelope {
@@ -520,7 +520,7 @@ fn execute_symbols(
         return 2;
     }
 
-    let symbol_files = symbols::extract_symbols(&files, root, cancelled, args.with_comments);
+    let symbol_files = symbols::extract_symbols(&files, root, cancelled, args.with_comments, args.with_tests);
 
     let (symbol_files, total_matches) = if let Some(ref find_pattern) = args.find {
         let matcher = match Matcher::build(find_pattern, args.is_regex) {

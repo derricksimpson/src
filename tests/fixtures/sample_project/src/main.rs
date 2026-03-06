@@ -26,3 +26,15 @@ pub trait Service {
 }
 
 const MAX_RETRIES: usize = 3;
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unit_test_adds() {
+        assert_eq!(super::add(1, 2), 3);
+    }
+
+    fn inline_test_helper() -> i32 {
+        42
+    }
+}

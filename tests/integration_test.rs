@@ -701,6 +701,23 @@ fn with_tests_includes_in_symbols() {
 }
 
 #[test]
+fn rust_inline_tests_excluded_in_symbols_by_default() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-g", "*.rs"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("fn main"));
+    assert!(!stdout.contains("unit_test_adds"));
+    assert!(!stdout.contains("inline_test_helper"));
+}
+
+#[test]
+fn rust_inline_tests_included_in_symbols_with_with_tests() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-s", "-g", "*.rs", "--with-tests"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("unit_test_adds"));
+    assert!(stdout.contains("inline_test_helper"));
+}
+
+#[test]
 fn test_files_excluded_in_stats() {
     let (stdout, _, code) = run_src_in(&fixture(), &["-S"]);
     assert_eq!(code, 0);

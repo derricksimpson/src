@@ -29,6 +29,11 @@ pub struct SymbolInfo {
 pub trait LangSymbols: Sync {
     fn extensions(&self) -> &[&str];
     fn extract_symbols(&self, content: &str) -> Vec<SymbolInfo>;
+
+    fn extract_symbols_with_tests(&self, content: &str, include_tests: bool) -> Vec<SymbolInfo> {
+        let _ = include_tests;
+        self.extract_symbols(content)
+    }
 }
 
 static HANDLERS: &[&dyn LangImports] = &[
