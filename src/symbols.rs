@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -27,8 +28,46 @@ pub fn extract_symbols(
         })
         .collect();
 
-    results.sort_by(|a, b| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()));
+    results.sort_unstable_by(|a, b| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()));
     results
+}
+
+pub fn extract_symbols_from_cache(
+    content_map: &HashMap<&str, &str>,
+    _root: &Path,
+    cancelled: &AtomicBool,
+    include_tests: bool,
+) -> Vec<SymbolFile> {
+    let entries: Vec<(&str, &str)> = content_map.iter().map(|(&k, &v)| (k, v)).collect();
+    let mut results: Vec<SymbolFile> = entries
+        .par_iter()
+        .filter_map(|(relative, content)| {
+            if cancelled.load(Ordering::Relaxed) {
+                return None;
+            }
+            process_cached(relative, content, include_tests)
+        })
+        .collect();
+
+    results.sort_unstable_by(|a, b| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()));
+    results
+}
+
+fn process_cached(relative: &str, content: &str, include_tests: bool) -> Option<SymbolFile> {
+    let path = Path::new(relative);
+    let ext = path.extension()?.to_str()?;
+    let handler = lang::get_symbol_handler(ext)?;
+
+    let symbols = handler.extract_symbols_with_tests(content, include_tests);
+    if symbols.is_empty() {
+        return None;
+    }
+
+    Some(SymbolFile {
+        path: relative.to_owned(),
+        symbols,
+        error: None,
+    })
 }
 
 fn process_file(file_path: &str, root: &Path, with_comments: bool, include_tests: bool) -> Option<SymbolFile> {

@@ -20,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
-use models::{FileEntry, MetaInfo, OutputEnvelope};
+use models::{FileEntry, MetaInfo, OutputEnvelope, OutputPayload};
 use searcher::Matcher;
 use yaml_output::OutputFormat;
 
@@ -87,14 +87,6 @@ fn make_meta(
     }
 }
 
-fn timeout_error(timed_out: bool) -> Option<String> {
-    if timed_out {
-        Some("Operation timed out".into())
-    } else {
-        None
-    }
-}
-
 fn apply_limit<T>(items: Vec<T>, limit: Option<usize>) -> Vec<T> {
     match limit {
         Some(n) if n < items.len() => items.into_iter().take(n).collect(),
@@ -109,16 +101,64 @@ fn collect_file_errors(entries: &[FileEntry]) -> Vec<String> {
         .collect()
 }
 
+fn error_envelope(msg: String) -> OutputEnvelope {
+    OutputEnvelope {
+        error: Some(msg),
+        ..Default::default()
+    }
+}
+
+fn finish(
+    meta: MetaInfo,
+    payload: OutputPayload,
+    errors: Vec<String>,
+    timed_out: bool,
+    args: &cli::CliArgs,
+    format: OutputFormat,
+) -> i32 {
+    let envelope = OutputEnvelope {
+        meta: Some(meta),
+        payload,
+        errors: if errors.is_empty() { None } else { Some(errors) },
+        error: if timed_out {
+            Some("Operation timed out — partial results may be incomplete".into())
+        } else {
+            None
+        },
+    };
+    emit(&envelope, format, &args.output);
+    if timed_out { 2 } else { 0 }
+}
+
+fn resolve_globs(args: &cli::CliArgs) -> Vec<String> {
+    if args.globs.is_empty() { vec!["*.*".to_owned()] } else { args.globs.clone() }
+}
+
+fn find_or_bail(
+    args: &cli::CliArgs,
+    root: &Path,
+    filter: &exclusion::ExclusionFilter,
+    cancelled: &AtomicBool,
+    start: Instant,
+    format: OutputFormat,
+) -> Result<(Vec<String>, usize), i32> {
+    let globs = resolve_globs(args);
+    let files = scanner::find_files_filtered(root, &globs, filter, cancelled, args.with_tests);
+    let scanned = files.len();
+    if cancelled.load(Ordering::Relaxed) {
+        let elapsed = start.elapsed().as_millis();
+        let code = finish(make_meta(elapsed, true, scanned, 0, None), OutputPayload::None, vec![], true, args, format);
+        return Err(code);
+    }
+    Ok((files, scanned))
+}
+
 fn execute(args: cli::CliArgs) -> i32 {
     let root = Path::new(&args.root);
     let format = resolve_format(&args);
 
     if !root.is_dir() {
-        let envelope = OutputEnvelope {
-            error: Some(format!("Directory not found: {}", args.root)),
-            ..Default::default()
-        };
-        emit(&envelope, format, &args.output);
+        emit(&error_envelope(format!("Directory not found: {}", args.root)), format, &args.output);
         return 1;
     }
 
@@ -153,15 +193,7 @@ fn execute(args: cli::CliArgs) -> i32 {
     } else if args.count && args.find.is_some() {
         execute_count(&args, root, &filter, &cancelled, start, format)
     } else if let Some(ref find_pattern) = args.find {
-        execute_search(
-            &args,
-            root,
-            find_pattern,
-            &filter,
-            &cancelled,
-            start,
-            format,
-        )
+        execute_search(&args, root, find_pattern, &filter, &cancelled, start, format)
     } else if !args.globs.is_empty() {
         execute_file_listing(&args, root, &filter, &cancelled, start, format)
     } else {
@@ -180,20 +212,7 @@ fn execute_directory_hierarchy(
     let tree = scanner::scan_directories(root, filter, cancelled, args.with_tests);
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
-
-    let envelope = OutputEnvelope {
-        meta: Some(make_meta(elapsed, timed_out, 0, 0, None)),
-        tree: Some(tree),
-        error: timeout_error(timed_out),
-        ..Default::default()
-    };
-
-    emit(&envelope, format, &args.output);
-    if timed_out {
-        2
-    } else {
-        0
-    }
+    finish(make_meta(elapsed, timed_out, 0, 0, None), OutputPayload::Tree(tree), vec![], timed_out, args, format)
 }
 
 fn execute_file_listing(
@@ -222,19 +241,7 @@ fn execute_file_listing(
     let entries = apply_limit(entries, args.limit);
     let matched = entries.len();
 
-    let envelope = OutputEnvelope {
-        meta: Some(make_meta(elapsed, timed_out, total, matched, None)),
-        files: Some(entries),
-        error: timeout_error(timed_out),
-        ..Default::default()
-    };
-
-    emit(&envelope, format, &args.output);
-    if timed_out {
-        2
-    } else {
-        0
-    }
+    finish(make_meta(elapsed, timed_out, total, matched, None), OutputPayload::Files(entries), vec![], timed_out, args, format)
 }
 
 fn execute_search(
@@ -249,42 +256,17 @@ fn execute_search(
     let matcher = match Matcher::build(pattern, args.is_regex) {
         Ok(m) => m,
         Err(e) => {
-            let envelope = OutputEnvelope {
-                error: Some(e),
-                ..Default::default()
-            };
-            emit(&envelope, format, &args.output);
+            emit(&error_envelope(e), format, &args.output);
             return 1;
         }
     };
 
-    let globs = if args.globs.is_empty() {
-        vec!["*.*".to_owned()]
-    } else {
-        args.globs.clone()
+    let (candidate_files, scanned) = match find_or_bail(args, root, filter, cancelled, start, format) {
+        Ok(v) => v,
+        Err(code) => return code,
     };
 
-    let candidate_files = scanner::find_files_filtered(root, &globs, filter, cancelled, args.with_tests);
-    let scanned = candidate_files.len();
-
-    if cancelled.load(Ordering::Relaxed) {
-        let elapsed = start.elapsed().as_millis();
-        let envelope = OutputEnvelope {
-            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
-            error: Some("Operation timed out — partial results may be incomplete".into()),
-            ..Default::default()
-        };
-        emit(&envelope, format, &args.output);
-        return 2;
-    }
-
-    let entries = searcher::search_files(
-        &candidate_files,
-        root,
-        &matcher,
-        args.line_numbers,
-        cancelled,
-    );
+    let entries = searcher::search_files(&candidate_files, root, &matcher, args.line_numbers, args.context, cancelled);
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
@@ -295,29 +277,7 @@ fn execute_search(
 
     let mut meta = make_meta(elapsed, timed_out, scanned, matched, None);
     meta.files_errored = errored;
-
-    let envelope = OutputEnvelope {
-        meta: Some(meta),
-        files: Some(entries),
-        errors: if file_errors.is_empty() {
-            None
-        } else {
-            Some(file_errors)
-        },
-        error: if timed_out {
-            Some("Operation timed out — partial results may be incomplete".into())
-        } else {
-            None
-        },
-        ..Default::default()
-    };
-
-    emit(&envelope, format, &args.output);
-    if timed_out {
-        2
-    } else {
-        0
-    }
+    finish(meta, OutputPayload::Files(entries), file_errors, timed_out, args, format)
 }
 
 fn execute_lines(
@@ -330,11 +290,7 @@ fn execute_lines(
     let specs = match lines::parse_line_specs(&args.lines, root) {
         Ok(s) => s,
         Err(e) => {
-            let envelope = OutputEnvelope {
-                error: Some(e),
-                ..Default::default()
-            };
-            emit(&envelope, format, &args.output);
+            emit(&error_envelope(e), format, &args.output);
             return 1;
         }
     };
@@ -356,25 +312,7 @@ fn execute_lines(
 
     let mut meta = make_meta(elapsed, timed_out, 0, matched, None);
     meta.files_errored = errored;
-
-    let envelope = OutputEnvelope {
-        meta: Some(meta),
-        files: Some(entries),
-        errors: if file_errors.is_empty() {
-            None
-        } else {
-            Some(file_errors)
-        },
-        error: timeout_error(timed_out),
-        ..Default::default()
-    };
-
-    emit(&envelope, format, &args.output);
-    if timed_out {
-        2
-    } else {
-        0
-    }
+    finish(meta, OutputPayload::Files(entries), file_errors, timed_out, args, format)
 }
 
 fn execute_graph(
@@ -385,23 +323,10 @@ fn execute_graph(
     start: Instant,
     format: OutputFormat,
 ) -> i32 {
-    let files = if args.globs.is_empty() {
-        scanner::find_files_filtered(root, &["*.*".to_owned()], filter, cancelled, args.with_tests)
-    } else {
-        scanner::find_files_filtered(root, &args.globs, filter, cancelled, args.with_tests)
+    let (files, scanned) = match find_or_bail(args, root, filter, cancelled, start, format) {
+        Ok(v) => v,
+        Err(code) => return code,
     };
-
-    let scanned = files.len();
-    if cancelled.load(Ordering::Relaxed) {
-        let elapsed = start.elapsed().as_millis();
-        let envelope = OutputEnvelope {
-            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
-            error: Some("Operation timed out".into()),
-            ..Default::default()
-        };
-        emit(&envelope, format, &args.output);
-        return 2;
-    }
 
     let graph_entries = graph::build_graph(&files, root, cancelled);
     let elapsed = start.elapsed().as_millis();
@@ -410,19 +335,7 @@ fn execute_graph(
     let graph_entries = apply_limit(graph_entries, args.limit);
     let matched = graph_entries.len();
 
-    let envelope = OutputEnvelope {
-        meta: Some(make_meta(elapsed, timed_out, scanned, matched, None)),
-        graph: Some(graph_entries),
-        error: timeout_error(timed_out),
-        ..Default::default()
-    };
-
-    emit(&envelope, format, &args.output);
-    if timed_out {
-        2
-    } else {
-        0
-    }
+    finish(make_meta(elapsed, timed_out, scanned, matched, None), OutputPayload::Graph(graph_entries), vec![], timed_out, args, format)
 }
 
 fn execute_callers(
@@ -434,33 +347,15 @@ fn execute_callers(
     format: OutputFormat,
 ) -> i32 {
     let name = args.callers.as_ref().unwrap();
-
-    let files = if args.globs.is_empty() {
-        scanner::find_files_filtered(root, &["*.*".to_owned()], filter, cancelled, args.with_tests)
-    } else {
-        scanner::find_files_filtered(root, &args.globs, filter, cancelled, args.with_tests)
+    let (files, scanned) = match find_or_bail(args, root, filter, cancelled, start, format) {
+        Ok(v) => v,
+        Err(code) => return code,
     };
-
-    let scanned = files.len();
-    if cancelled.load(Ordering::Relaxed) {
-        let elapsed = start.elapsed().as_millis();
-        let envelope = OutputEnvelope {
-            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
-            error: Some("Operation timed out".into()),
-            ..Default::default()
-        };
-        emit(&envelope, format, &args.output);
-        return 2;
-    }
 
     let callers_output = match callers::find_callers(&files, root, name, args.is_regex, args.with_tests, cancelled) {
         Ok(c) => c,
         Err(e) => {
-            let envelope = OutputEnvelope {
-                error: Some(e),
-                ..Default::default()
-            };
-            emit(&envelope, format, &args.output);
+            emit(&error_envelope(e), format, &args.output);
             return 1;
         }
     };
@@ -479,19 +374,7 @@ fn execute_callers(
     };
     let matched = callers_output.files.len();
 
-    let envelope = OutputEnvelope {
-        meta: Some(make_meta(elapsed, timed_out, scanned, matched, Some(total_refs))),
-        callers: Some(callers_output),
-        error: timeout_error(timed_out),
-        ..Default::default()
-    };
-
-    emit(&envelope, format, &args.output);
-    if timed_out {
-        2
-    } else {
-        0
-    }
+    finish(make_meta(elapsed, timed_out, scanned, matched, Some(total_refs)), OutputPayload::Callers(callers_output), vec![], timed_out, args, format)
 }
 
 fn execute_symbols(
@@ -502,23 +385,10 @@ fn execute_symbols(
     start: Instant,
     format: OutputFormat,
 ) -> i32 {
-    let files = if args.globs.is_empty() {
-        scanner::find_files_filtered(root, &["*.*".to_owned()], filter, cancelled, args.with_tests)
-    } else {
-        scanner::find_files_filtered(root, &args.globs, filter, cancelled, args.with_tests)
+    let (files, scanned) = match find_or_bail(args, root, filter, cancelled, start, format) {
+        Ok(v) => v,
+        Err(code) => return code,
     };
-
-    let scanned = files.len();
-    if cancelled.load(Ordering::Relaxed) {
-        let elapsed = start.elapsed().as_millis();
-        let envelope = OutputEnvelope {
-            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
-            error: Some("Operation timed out".into()),
-            ..Default::default()
-        };
-        emit(&envelope, format, &args.output);
-        return 2;
-    }
 
     let symbol_files = symbols::extract_symbols(&files, root, cancelled, args.with_comments, args.with_tests);
 
@@ -526,11 +396,7 @@ fn execute_symbols(
         let matcher = match Matcher::build(find_pattern, args.is_regex) {
             Ok(m) => m,
             Err(e) => {
-                let envelope = OutputEnvelope {
-                    error: Some(e),
-                    ..Default::default()
-                };
-                emit(&envelope, format, &args.output);
+                emit(&error_envelope(e), format, &args.output);
                 return 1;
             }
         };
@@ -555,25 +421,7 @@ fn execute_symbols(
     let mut meta = make_meta(elapsed, timed_out, scanned, matched, total);
     meta.files_errored = errored;
 
-    let envelope = OutputEnvelope {
-        meta: Some(meta),
-        symbols: Some(symbol_files),
-        compact_symbols: args.compact,
-        errors: if sym_errors.is_empty() {
-            None
-        } else {
-            Some(sym_errors)
-        },
-        error: timeout_error(timed_out),
-        ..Default::default()
-    };
-
-    emit(&envelope, format, &args.output);
-    if timed_out {
-        2
-    } else {
-        0
-    }
+    finish(meta, OutputPayload::Symbols { files: symbol_files, compact: args.compact }, sym_errors, timed_out, args, format)
 }
 
 fn execute_stats(
@@ -584,41 +432,16 @@ fn execute_stats(
     start: Instant,
     format: OutputFormat,
 ) -> i32 {
-    let files = if args.globs.is_empty() {
-        scanner::find_files_filtered(root, &["*.*".to_owned()], filter, cancelled, args.with_tests)
-    } else {
-        scanner::find_files_filtered(root, &args.globs, filter, cancelled, args.with_tests)
+    let (files, scanned) = match find_or_bail(args, root, filter, cancelled, start, format) {
+        Ok(v) => v,
+        Err(code) => return code,
     };
-
-    let scanned = files.len();
-    if cancelled.load(Ordering::Relaxed) {
-        let elapsed = start.elapsed().as_millis();
-        let envelope = OutputEnvelope {
-            meta: Some(make_meta(elapsed, true, scanned, 0, None)),
-            error: Some("Operation timed out".into()),
-            ..Default::default()
-        };
-        emit(&envelope, format, &args.output);
-        return 2;
-    }
 
     let stats_output = stats::compute_stats(&files, root, cancelled);
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 
-    let envelope = OutputEnvelope {
-        meta: Some(make_meta(elapsed, timed_out, scanned, scanned, None)),
-        stats: Some(stats_output),
-        error: timeout_error(timed_out),
-        ..Default::default()
-    };
-
-    emit(&envelope, format, &args.output);
-    if timed_out {
-        2
-    } else {
-        0
-    }
+    finish(make_meta(elapsed, timed_out, scanned, scanned, None), OutputPayload::Stats(stats_output), vec![], timed_out, args, format)
 }
 
 fn execute_count(
@@ -633,34 +456,15 @@ fn execute_count(
     let matcher = match Matcher::build(pattern, args.is_regex) {
         Ok(m) => m,
         Err(e) => {
-            let envelope = OutputEnvelope {
-                error: Some(e),
-                ..Default::default()
-            };
-            emit(&envelope, format, &args.output);
+            emit(&error_envelope(e), format, &args.output);
             return 1;
         }
     };
 
-    let globs = if args.globs.is_empty() {
-        vec!["*.*".to_owned()]
-    } else {
-        args.globs.clone()
+    let (candidate_files, scanned) = match find_or_bail(args, root, filter, cancelled, start, format) {
+        Ok(v) => v,
+        Err(code) => return code,
     };
-
-    let candidate_files = scanner::find_files_filtered(root, &globs, filter, cancelled, args.with_tests);
-    let scanned = candidate_files.len();
-
-    if cancelled.load(Ordering::Relaxed) {
-        let elapsed = start.elapsed().as_millis();
-        let envelope = OutputEnvelope {
-            meta: Some(make_meta(elapsed, true, scanned, 0, Some(0))),
-            error: Some("Operation timed out".into()),
-            ..Default::default()
-        };
-        emit(&envelope, format, &args.output);
-        return 2;
-    }
 
     let (count_entries, total) = count::count_matches(&candidate_files, root, &matcher, cancelled);
     let elapsed = start.elapsed().as_millis();
@@ -669,23 +473,7 @@ fn execute_count(
     let count_entries = apply_limit(count_entries, args.limit);
     let matched = count_entries.len();
 
-    let envelope = OutputEnvelope {
-        meta: Some(make_meta(elapsed, timed_out, scanned, matched, Some(total))),
-        counts: Some(count_entries),
-        error: if timed_out {
-            Some("Operation timed out — partial results may be incomplete".into())
-        } else {
-            None
-        },
-        ..Default::default()
-    };
-
-    emit(&envelope, format, &args.output);
-    if timed_out {
-        2
-    } else {
-        0
-    }
+    finish(make_meta(elapsed, timed_out, scanned, matched, Some(total)), OutputPayload::Counts(count_entries), vec![], timed_out, args, format)
 }
 
 #[cfg(unix)]

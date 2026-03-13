@@ -21,6 +21,7 @@ pub struct CliArgs {
     pub with_comments: bool,
     pub with_tests: bool,
     pub auto_expand: bool,
+    pub context: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -58,6 +59,7 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut with_comments = false;
     let mut with_tests = false;
     let mut auto_expand = false;
+    let mut context: Option<usize> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -80,7 +82,8 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
             "--context" | "--pad" | "-C" => {
                 i += 1;
                 if i >= args.len() { return Err("Missing value for --context".into()); }
-                // Legacy flag — ignored. Search always returns full file content.
+                context = Some(args[i].parse::<usize>()
+                    .map_err(|_| format!("Invalid integer for --context: {}", args[i]))?);
             }
             "--timeout" => {
                 i += 1;
@@ -211,6 +214,7 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
         with_comments,
         with_tests,
         auto_expand,
+        context,
     }))
 }
 
@@ -245,6 +249,7 @@ Options:
   --with-comments         Include doc comments in symbol output (requires --symbols)
   --with-tests            Include test files in output (excluded by default)
   --auto-expand           Expand --lines ranges to full enclosing symbol (requires --lines)
+  --context, -C <n>       Context lines around matches in --find output (default: full file)
   --limit, -L <n>         Max number of files in the output
   --no-line-numbers       Suppress per-line number prefixes in content output
   --timeout <secs>        Max execution time in seconds

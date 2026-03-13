@@ -26,7 +26,7 @@ pub fn count_matches(
 
     let mut entries = entries;
     let total: usize = entries.iter().map(|e| e.count).sum();
-    entries.sort_by(|a, b| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()));
+    entries.sort_unstable_by(|a, b| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()));
     (entries, total)
 }
 

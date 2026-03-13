@@ -4,6 +4,7 @@ use std::io::{BufReader, Read};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use memchr::memchr_iter;
 use memmap2::Mmap;
 use rayon::prelude::*;
 
@@ -62,9 +63,9 @@ pub fn compute_stats(
             bytes,
         })
         .collect();
-    languages.sort_by(|a, b| b.lines.cmp(&a.lines));
+    languages.sort_unstable_by(|a, b| b.lines.cmp(&a.lines));
 
-    all_files.sort_by(|a, b| b.2.cmp(&a.2));
+    all_files.sort_unstable_by(|a, b| b.2.cmp(&a.2));
     let largest: Vec<LargestFile> = all_files
         .iter()
         .take(10)
@@ -152,7 +153,7 @@ fn count_lines(path: &Path, size: u64) -> usize {
 }
 
 fn memchr_count(needle: u8, haystack: &[u8]) -> usize {
-    haystack.iter().filter(|&&b| b == needle).count()
+    memchr_iter(needle, haystack).count()
 }
 
 fn bytecount_newlines(data: &[u8]) -> usize {

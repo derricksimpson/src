@@ -10,8 +10,8 @@ use crate::models::{FileChunk, FileEntry};
 use crate::path_helper;
 
 pub enum Matcher {
-    Literal(String),
-    MultiTerm(Vec<String>),
+    Literal(Vec<u8>),
+    MultiTerm(Vec<Vec<u8>>),
     Regex(Regex),
 }
 
@@ -22,11 +22,11 @@ impl Matcher {
                 .map(Matcher::Regex)
                 .map_err(|e| format!("Invalid regex: {}", e))
         } else if pattern.contains('|') {
-            let terms: Vec<String> = pattern
+            let terms: Vec<Vec<u8>> = pattern
                 .split('|')
                 .map(|s| s.trim())
                 .filter(|s| !s.is_empty())
-                .map(|s| s.to_owned())
+                .map(|s| s.as_bytes().to_ascii_lowercase())
                 .collect();
             if terms.is_empty() {
                 Err("Empty search pattern".into())
@@ -34,35 +34,47 @@ impl Matcher {
                 Ok(Matcher::MultiTerm(terms))
             }
         } else {
-            Ok(Matcher::Literal(pattern.to_owned()))
+            Ok(Matcher::Literal(pattern.as_bytes().to_ascii_lowercase()))
         }
     }
 
     #[inline]
     pub fn is_match(&self, line: &str) -> bool {
         match self {
-            Matcher::Literal(pat) => contains_ci(line, pat),
-            Matcher::MultiTerm(terms) => terms.iter().any(|t| contains_ci(line, t)),
+            Matcher::Literal(needle) => contains_ci_prelow(line.as_bytes(), needle),
+            Matcher::MultiTerm(terms) => terms.iter().any(|n| contains_ci_prelow(line.as_bytes(), n)),
             Matcher::Regex(re) => re.is_match(line),
         }
     }
 }
 
 #[inline]
-fn contains_ci(haystack: &str, needle: &str) -> bool {
-    if needle.len() > haystack.len() {
+fn contains_ci_prelow(haystack: &[u8], needle_lower: &[u8]) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    if needle_lower.len() > haystack.len() {
         return false;
     }
-    let h = haystack.as_bytes();
-    let n = needle.as_bytes();
-    let end = h.len() - n.len() + 1;
-    'outer: for i in 0..end {
-        for j in 0..n.len() {
-            if h[i + j].to_ascii_lowercase() != n[j].to_ascii_lowercase() {
-                continue 'outer;
-            }
+    let end = haystack.len() - needle_lower.len() + 1;
+    let first = needle_lower[0];
+    let mut i = 0;
+    while i < end {
+        if haystack[i].to_ascii_lowercase() != first {
+            i += 1;
+            continue;
         }
-        return true;
+        let mut j = 1;
+        while j < needle_lower.len() {
+            if haystack[i + j].to_ascii_lowercase() != needle_lower[j] {
+                break;
+            }
+            j += 1;
+        }
+        if j == needle_lower.len() {
+            return true;
+        }
+        i += 1;
     }
     false
 }
@@ -72,6 +84,7 @@ pub fn search_files(
     root: &Path,
     matcher: &Matcher,
     line_numbers: bool,
+    context: Option<usize>,
     cancelled: &AtomicBool,
 ) -> Vec<FileEntry> {
     let mut results: Vec<FileEntry> = file_paths
@@ -80,11 +93,11 @@ pub fn search_files(
             if cancelled.load(Ordering::Relaxed) {
                 return None;
             }
-            process_file(file_path, root, matcher, line_numbers)
+            process_file(file_path, root, matcher, line_numbers, context)
         })
         .collect();
 
-    results.sort_by(|a, b| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()));
+    results.sort_unstable_by(|a, b| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()));
     results
 }
 
@@ -93,6 +106,7 @@ fn process_file(
     root: &Path,
     matcher: &Matcher,
     line_numbers: bool,
+    context: Option<usize>,
 ) -> Option<FileEntry> {
     let path = Path::new(file_path);
     let relative = path_helper::normalized_relative(root, path);
@@ -117,7 +131,7 @@ fn process_file(
         }),
     };
 
-    search_content(&content, &relative, matcher, line_numbers)
+    search_content(&content, &relative, matcher, line_numbers, context)
 }
 
 fn search_content(
@@ -125,34 +139,53 @@ fn search_content(
     relative: &str,
     matcher: &Matcher,
     line_numbers: bool,
+    context: Option<usize>,
 ) -> Option<FileEntry> {
     let lines: Vec<&str> = content.lines().collect();
 
-    let has_match = lines.iter().any(|line| matcher.is_match(line));
-    if !has_match {
+    let matching_indices: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| matcher.is_match(line))
+        .map(|(i, _)| i)
+        .collect();
+
+    if matching_indices.is_empty() {
         return None;
     }
 
-    let mut output = String::new();
-    for (i, line) in lines.iter().enumerate() {
-        if line_numbers {
-            let line_num = i + 1;
-            output.push_str(&line_num.to_string());
-            output.push_str(".  ");
+    match context {
+        Some(pad) => {
+            let ranges = merge_ranges(&matching_indices, pad, lines.len());
+            let chunks = build_chunks(&lines, &ranges, line_numbers);
+            Some(FileEntry {
+                path: relative.to_owned(),
+                contents: None,
+                error: None,
+                chunks: Some(chunks),
+            })
         }
-        output.push_str(line);
-        output.push('\n');
+        None => {
+            let mut output = String::new();
+            for (i, line) in lines.iter().enumerate() {
+                if line_numbers {
+                    let line_num = i + 1;
+                    output.push_str(&line_num.to_string());
+                    output.push_str(".  ");
+                }
+                output.push_str(line);
+                output.push('\n');
+            }
+            Some(FileEntry {
+                path: relative.to_owned(),
+                contents: Some(output),
+                error: None,
+                chunks: None,
+            })
+        }
     }
-
-    Some(FileEntry {
-        path: relative.to_owned(),
-        contents: Some(output),
-        error: None,
-        chunks: None,
-    })
 }
 
-#[allow(dead_code)]
 fn merge_ranges(
     matching_indices: &[usize],
     pad: usize,
@@ -256,19 +289,19 @@ mod tests {
 
     #[test]
     fn contains_ci_basic() {
-        assert!(contains_ci("Hello World", "hello"));
-        assert!(contains_ci("Hello World", "WORLD"));
-        assert!(!contains_ci("Hello", "xyz"));
+        assert!(contains_ci_prelow(b"Hello World", b"hello"));
+        assert!(contains_ci_prelow(b"Hello World", b"world"));
+        assert!(!contains_ci_prelow(b"Hello", b"xyz"));
     }
 
     #[test]
     fn contains_ci_needle_longer_than_haystack() {
-        assert!(!contains_ci("ab", "abcdef"));
+        assert!(!contains_ci_prelow(b"ab", b"abcdef"));
     }
 
     #[test]
     fn contains_ci_empty() {
-        assert!(contains_ci("anything", ""));
+        assert!(contains_ci_prelow(b"anything", b""));
     }
 
     #[test]

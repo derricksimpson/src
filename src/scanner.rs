@@ -93,8 +93,8 @@ pub fn scan_directories(
         .collect();
 
     let mut children = children;
-    children.sort_by(|a, b| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()));
-    files.sort_by(|a: &String, b: &String| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+    children.sort_unstable_by(|a, b| a.name.to_ascii_lowercase().cmp(&b.name.to_ascii_lowercase()));
+    files.sort_unstable_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
 
     ScanResult {
         name: dir_name,
@@ -165,7 +165,7 @@ pub fn find_files(
 ) -> Vec<String> {
     let has_path_glob = globs.iter().any(|g| g.contains('/') || g.contains('\\'));
     let mut results = find_files_parallel(root, root, globs, has_path_glob, filter, cancelled);
-    results.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+    results.sort_unstable_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
     results
 }
 

@@ -29,7 +29,7 @@ pub fn build_graph(
         })
         .collect();
 
-    entries.sort_by(|a, b| a.file.to_ascii_lowercase().cmp(&b.file.to_ascii_lowercase()));
+    entries.sort_unstable_by(|a, b| a.file.to_ascii_lowercase().cmp(&b.file.to_ascii_lowercase()));
     entries
 }
 
@@ -78,7 +78,7 @@ fn process_file(
         }
     }
 
-    resolved.sort_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
+    resolved.sort_unstable_by(|a, b| a.to_ascii_lowercase().cmp(&b.to_ascii_lowercase()));
 
     Some(GraphEntry {
         file: relative,

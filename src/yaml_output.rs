@@ -2,7 +2,7 @@ use std::io::{self, Write, BufWriter};
 
 use crate::models::{
     CallersOutput, CountEntry, FileChunk, FileEntry, GraphEntry, LangStats, LargestFile,
-    MetaInfo, OutputEnvelope, ScanResult, StatsOutput, SymbolFile, SymbolInfo,
+    MetaInfo, OutputEnvelope, OutputPayload, ScanResult, StatsOutput, SymbolFile, SymbolInfo,
 };
 
 #[derive(Clone, Copy, PartialEq)]
@@ -50,29 +50,18 @@ fn write_envelope_yaml(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Res
             }
         }
     }
-    if let Some(ref tree) = envelope.tree {
-        write!(w, "tree:\n")?;
-        write_tree_node(w, tree, 2)?;
-    }
-    if let Some(ref graph) = envelope.graph {
-        write_graph(w, graph)?;
-    }
-    if let Some(ref symbols) = envelope.symbols {
-        write_symbols(w, symbols, envelope.compact_symbols)?;
-    }
-    if let Some(ref callers_output) = envelope.callers {
-        write_callers(w, callers_output)?;
-    }
-    if let Some(ref counts) = envelope.counts {
-        write_counts(w, counts)?;
-    }
-    if let Some(ref stats) = envelope.stats {
-        write_stats(w, stats)?;
-    }
-    if let Some(ref files) = envelope.files {
-        if !files.is_empty() {
-            write_files(w, files)?;
+    match &envelope.payload {
+        OutputPayload::Tree(tree) => {
+            write!(w, "tree:\n")?;
+            write_tree_node(w, tree, 2)?;
         }
+        OutputPayload::Graph(graph) => write_graph(w, graph)?,
+        OutputPayload::Symbols { files, compact } => write_symbols(w, files, *compact)?,
+        OutputPayload::Callers(callers_output) => write_callers(w, callers_output)?,
+        OutputPayload::Counts(counts) => write_counts(w, counts)?,
+        OutputPayload::Stats(stats) => write_stats(w, stats)?,
+        OutputPayload::Files(files) if !files.is_empty() => write_files(w, files)?,
+        _ => {}
     }
     Ok(())
 }
@@ -538,67 +527,69 @@ fn write_indent(w: &mut impl Write, n: usize) -> io::Result<()> {
 // ── JSON output ──
 
 fn write_envelope_json(w: &mut impl Write, envelope: &OutputEnvelope) -> io::Result<()> {
-    write!(w, "{{")?;
-    let mut first = true;
+    let mut j = Jw::new(w);
+    j.obj_start()?;
 
     if let Some(ref meta) = envelope.meta {
-        json_comma(w, &mut first)?;
-        write_meta_json(w, meta)?;
+        write_meta_json(&mut j, meta)?;
     }
     if let Some(ref error) = envelope.error {
-        json_comma(w, &mut first)?;
-        write!(w, "\"error\":")?;
-        write_json_string(w, error)?;
+        j.key_str("error", error)?;
     }
     if let Some(ref errors) = envelope.errors {
         if !errors.is_empty() {
-            json_comma(w, &mut first)?;
-            write!(w, "\"errors\":[")?;
-            for (i, e) in errors.iter().enumerate() {
-                if i > 0 { write!(w, ",")?; }
-                write_json_string(w, e)?;
-            }
-            write!(w, "]")?;
+            j.key("errors")?; j.arr_start()?;
+            for e in errors { j.arr_str(e)?; }
+            j.arr_end()?;
         }
     }
-    if let Some(ref tree) = envelope.tree {
-        json_comma(w, &mut first)?;
-        write!(w, "\"tree\":")?;
-        write_tree_json(w, tree)?;
-    }
-    if let Some(ref graph) = envelope.graph {
-        json_comma(w, &mut first)?;
-        write_graph_json(w, graph)?;
-    }
-    if let Some(ref symbols) = envelope.symbols {
-        json_comma(w, &mut first)?;
-        write_symbols_json(w, symbols, envelope.compact_symbols)?;
-    }
-    if let Some(ref callers_output) = envelope.callers {
-        json_comma(w, &mut first)?;
-        write_callers_json(w, callers_output)?;
-    }
-    if let Some(ref counts) = envelope.counts {
-        json_comma(w, &mut first)?;
-        write_counts_json(w, counts)?;
-    }
-    if let Some(ref stats) = envelope.stats {
-        json_comma(w, &mut first)?;
-        write_stats_json(w, stats)?;
-    }
-    if let Some(ref files) = envelope.files {
-        if !files.is_empty() {
-            json_comma(w, &mut first)?;
-            write_files_json(w, files)?;
-        }
+    match &envelope.payload {
+        OutputPayload::Tree(tree) => { j.key("tree")?; write_tree_json(&mut j, tree)?; }
+        OutputPayload::Graph(graph) => write_graph_json(&mut j, graph)?,
+        OutputPayload::Symbols { files, compact } => write_symbols_json(&mut j, files, *compact)?,
+        OutputPayload::Callers(callers_output) => write_callers_json(&mut j, callers_output)?,
+        OutputPayload::Counts(counts) => write_counts_json(&mut j, counts)?,
+        OutputPayload::Stats(stats) => write_stats_json(&mut j, stats)?,
+        OutputPayload::Files(files) if !files.is_empty() => write_files_json(&mut j, files)?,
+        _ => {}
     }
 
-    write!(w, "}}\n")
+    j.obj_end()?;
+    write!(j.w, "\n")
 }
 
-fn json_comma(w: &mut impl Write, first: &mut bool) -> io::Result<()> {
-    if *first { *first = false; } else { write!(w, ",")?; }
-    Ok(())
+struct Jw<'a, W: Write> {
+    w: &'a mut W,
+    need_comma: Vec<bool>,
+}
+
+impl<'a, W: Write> Jw<'a, W> {
+    fn new(w: &'a mut W) -> Self { Self { w, need_comma: vec![false] } }
+
+    fn comma(&mut self) -> io::Result<()> {
+        if let Some(need) = self.need_comma.last_mut() {
+            if *need { write!(self.w, ",")?; } else { *need = true; }
+        }
+        Ok(())
+    }
+
+    fn key(&mut self, k: &str) -> io::Result<&mut Self> { self.comma()?; write!(self.w, "\"{}\":", k)?; Ok(self) }
+    fn str(&mut self, s: &str) -> io::Result<&mut Self> { write_json_string(self.w, s)?; Ok(self) }
+    fn int<N: std::fmt::Display>(&mut self, n: N) -> io::Result<&mut Self> { write!(self.w, "{}", n)?; Ok(self) }
+    fn bool_val(&mut self, b: bool) -> io::Result<&mut Self> { write!(self.w, "{}", b)?; Ok(self) }
+    fn null(&mut self) -> io::Result<&mut Self> { write!(self.w, "null")?; Ok(self) }
+
+    fn key_str(&mut self, k: &str, v: &str) -> io::Result<()> { self.key(k)?.str(v)?; Ok(()) }
+    fn key_int<N: std::fmt::Display>(&mut self, k: &str, v: N) -> io::Result<()> { self.key(k)?.int(v)?; Ok(()) }
+    fn key_bool(&mut self, k: &str, v: bool) -> io::Result<()> { self.key(k)?.bool_val(v)?; Ok(()) }
+
+    fn obj_start(&mut self) -> io::Result<()> { self.need_comma.push(false); write!(self.w, "{{") }
+    fn obj_end(&mut self) -> io::Result<()> { self.need_comma.pop(); write!(self.w, "}}") }
+    fn arr_start(&mut self) -> io::Result<()> { self.need_comma.push(false); write!(self.w, "[") }
+    fn arr_end(&mut self) -> io::Result<()> { self.need_comma.pop(); write!(self.w, "]") }
+
+    fn arr_str(&mut self, s: &str) -> io::Result<()> { self.comma()?; write_json_string(self.w, s)?; Ok(()) }
+    fn arr_obj_start(&mut self) -> io::Result<()> { self.comma()?; self.obj_start() }
 }
 
 fn write_json_string(w: &mut impl Write, s: &str) -> io::Result<()> {
@@ -617,184 +608,162 @@ fn write_json_string(w: &mut impl Write, s: &str) -> io::Result<()> {
     write!(w, "\"")
 }
 
-fn write_meta_json(w: &mut impl Write, meta: &MetaInfo) -> io::Result<()> {
-    write!(w, "\"meta\":{{\"elapsedMs\":{},\"timeout\":{},\"filesScanned\":{},\"filesMatched\":{}",
-        meta.elapsed_ms, meta.timeout, meta.files_scanned, meta.files_matched)?;
-    if meta.files_errored != 0 {
-        write!(w, ",\"filesErrored\":{}", meta.files_errored)?;
-    }
-    if let Some(total) = meta.total_matches {
-        write!(w, ",\"totalMatches\":{}", total)?;
-    }
-    write!(w, "}}")
+fn write_meta_json(j: &mut Jw<impl Write>, meta: &MetaInfo) -> io::Result<()> {
+    j.key("meta")?; j.obj_start()?;
+    j.key_int("elapsedMs", meta.elapsed_ms)?;
+    j.key_bool("timeout", meta.timeout)?;
+    j.key_int("filesScanned", meta.files_scanned)?;
+    j.key_int("filesMatched", meta.files_matched)?;
+    if meta.files_errored != 0 { j.key_int("filesErrored", meta.files_errored)?; }
+    if let Some(total) = meta.total_matches { j.key_int("totalMatches", total)?; }
+    j.obj_end()
 }
 
-fn write_tree_json(w: &mut impl Write, node: &ScanResult) -> io::Result<()> {
-    write!(w, "{{\"name\":")?;
-    write_json_string(w, &node.name)?;
+fn write_tree_json(j: &mut Jw<impl Write>, node: &ScanResult) -> io::Result<()> {
+    j.obj_start()?;
+    j.key_str("name", &node.name)?;
     if let Some(ref files) = node.files {
-        write!(w, ",\"files\":[")?;
-        for (i, f) in files.iter().enumerate() {
-            if i > 0 { write!(w, ",")?; }
-            write_json_string(w, f)?;
-        }
-        write!(w, "]")?;
+        j.key("files")?; j.arr_start()?;
+        for f in files { j.arr_str(f)?; }
+        j.arr_end()?;
     }
     if let Some(ref children) = node.children {
-        write!(w, ",\"children\":[")?;
-        for (i, child) in children.iter().enumerate() {
-            if i > 0 { write!(w, ",")?; }
-            write_tree_json(w, child)?;
-        }
-        write!(w, "]")?;
+        j.key("children")?; j.arr_start()?;
+        for child in children { j.comma()?; write_tree_json(j, child)?; }
+        j.arr_end()?;
     }
-    write!(w, "}}")
+    j.obj_end()
 }
 
-fn write_graph_json(w: &mut impl Write, graph: &[GraphEntry]) -> io::Result<()> {
-    write!(w, "\"graph\":[")?;
-    for (i, entry) in graph.iter().enumerate() {
-        if i > 0 { write!(w, ",")?; }
-        write!(w, "{{\"file\":")?;
-        write_json_string(w, &entry.file)?;
-        write!(w, ",\"imports\":[")?;
-        for (j, imp) in entry.imports.iter().enumerate() {
-            if j > 0 { write!(w, ",")?; }
-            write_json_string(w, imp)?;
-        }
-        write!(w, "]}}")?;
+fn write_graph_json(j: &mut Jw<impl Write>, graph: &[GraphEntry]) -> io::Result<()> {
+    j.key("graph")?; j.arr_start()?;
+    for entry in graph {
+        j.arr_obj_start()?;
+        j.key_str("file", &entry.file)?;
+        j.key("imports")?; j.arr_start()?;
+        for imp in &entry.imports { j.arr_str(imp)?; }
+        j.arr_end()?;
+        j.obj_end()?;
     }
-    write!(w, "]")
+    j.arr_end()
 }
 
-fn write_symbols_json(w: &mut impl Write, symbol_files: &[SymbolFile], compact: bool) -> io::Result<()> {
-    write!(w, "\"symbols\":[")?;
-    for (i, sf) in symbol_files.iter().enumerate() {
-        if i > 0 { write!(w, ",")?; }
-        write!(w, "{{\"path\":")?;
-        write_json_string(w, &sf.path)?;
-        write!(w, ",\"symbols\":[")?;
-        for (j, sym) in sf.symbols.iter().enumerate() {
-            if j > 0 { write!(w, ",")?; }
-            write!(w, "{{\"kind\":")?;
-            write_json_string(w, sym.kind)?;
-            write!(w, ",\"name\":")?;
-            write_json_string(w, &sym.name)?;
-            write!(w, ",\"line\":{},\"endLine\":{}", sym.line, sym.end_line)?;
+fn write_symbols_json(j: &mut Jw<impl Write>, symbol_files: &[SymbolFile], compact: bool) -> io::Result<()> {
+    j.key("symbols")?; j.arr_start()?;
+    for sf in symbol_files {
+        j.arr_obj_start()?;
+        j.key_str("path", &sf.path)?;
+        j.key("symbols")?; j.arr_start()?;
+        for sym in &sf.symbols {
+            j.arr_obj_start()?;
+            j.key_str("kind", sym.kind)?;
+            j.key_str("name", &sym.name)?;
+            j.key_int("line", sym.line)?;
+            j.key_int("endLine", sym.end_line)?;
             if !compact {
-                if let Some(vis) = sym.visibility {
-                    write!(w, ",\"visibility\":")?;
-                    write_json_string(w, vis)?;
-                }
-                if let Some(ref parent) = sym.parent {
-                    write!(w, ",\"parent\":")?;
-                    write_json_string(w, parent)?;
-                }
-                write!(w, ",\"signature\":")?;
-                write_json_string(w, &sym.signature)?;
+                if let Some(vis) = sym.visibility { j.key_str("visibility", vis)?; }
+                if let Some(ref parent) = sym.parent { j.key_str("parent", parent)?; }
+                j.key_str("signature", &sym.signature)?;
             }
-            if let Some(ref comment) = sym.comment {
-                write!(w, ",\"comment\":")?;
-                write_json_string(w, comment)?;
-            }
-            write!(w, "}}")?;
+            if let Some(ref comment) = sym.comment { j.key_str("comment", comment)?; }
+            j.obj_end()?;
         }
-        write!(w, "]}}")?;
+        j.arr_end()?;
+        j.obj_end()?;
     }
-    write!(w, "]")
+    j.arr_end()
 }
 
-fn write_callers_json(w: &mut impl Write, output: &CallersOutput) -> io::Result<()> {
+fn write_callers_json(j: &mut Jw<impl Write>, output: &CallersOutput) -> io::Result<()> {
     if output.declarations.is_empty() {
-        write!(w, "\"declaration\":null")?;
+        j.key("declaration")?.null()?;
     } else {
-        write!(w, "\"declarations\":[")?;
-        for (i, d) in output.declarations.iter().enumerate() {
-            if i > 0 { write!(w, ",")?; }
-            write!(w, "{{\"path\":")?;
-            write_json_string(w, &d.path)?;
-            write!(w, ",\"line\":{},\"signature\":", d.line)?;
-            write_json_string(w, &d.signature)?;
-            write!(w, "}}")?;
+        j.key("declarations")?; j.arr_start()?;
+        for d in &output.declarations {
+            j.arr_obj_start()?;
+            j.key_str("path", &d.path)?;
+            j.key_int("line", d.line)?;
+            j.key_str("signature", &d.signature)?;
+            j.obj_end()?;
         }
-        write!(w, "]")?;
+        j.arr_end()?;
     }
-    write!(w, ",\"callers\":[")?;
-    for (i, cf) in output.files.iter().enumerate() {
-        if i > 0 { write!(w, ",")?; }
-        write!(w, "{{\"path\":")?;
-        write_json_string(w, &cf.path)?;
-        write!(w, ",\"sites\":[")?;
-        for (j, site) in cf.sites.iter().enumerate() {
-            if j > 0 { write!(w, ",")?; }
-            write!(w, "{{\"line\":{},\"content\":", site.line)?;
-            write_json_string(w, &site.content)?;
-            write!(w, "}}")?;
+    j.key("callers")?; j.arr_start()?;
+    for cf in &output.files {
+        j.arr_obj_start()?;
+        j.key_str("path", &cf.path)?;
+        j.key("sites")?; j.arr_start()?;
+        for site in &cf.sites {
+            j.arr_obj_start()?;
+            j.key_int("line", site.line)?;
+            j.key_str("content", &site.content)?;
+            j.obj_end()?;
         }
-        write!(w, "]}}")?;
+        j.arr_end()?;
+        j.obj_end()?;
     }
-    write!(w, "]")
+    j.arr_end()
 }
 
-fn write_counts_json(w: &mut impl Write, counts: &[CountEntry]) -> io::Result<()> {
-    write!(w, "\"files\":[")?;
-    for (i, entry) in counts.iter().enumerate() {
-        if i > 0 { write!(w, ",")?; }
-        write!(w, "{{\"path\":")?;
-        write_json_string(w, &entry.path)?;
-        write!(w, ",\"count\":{}}}", entry.count)?;
+fn write_counts_json(j: &mut Jw<impl Write>, counts: &[CountEntry]) -> io::Result<()> {
+    j.key("files")?; j.arr_start()?;
+    for entry in counts {
+        j.arr_obj_start()?;
+        j.key_str("path", &entry.path)?;
+        j.key_int("count", entry.count)?;
+        j.obj_end()?;
     }
-    write!(w, "]")
+    j.arr_end()
 }
 
-fn write_stats_json(w: &mut impl Write, stats: &StatsOutput) -> io::Result<()> {
-    write!(w, "\"languages\":[")?;
-    for (i, lang) in stats.languages.iter().enumerate() {
-        if i > 0 { write!(w, ",")?; }
-        write!(w, "{{\"extension\":")?;
-        write_json_string(w, &lang.extension)?;
-        write!(w, ",\"files\":{},\"lines\":{},\"bytes\":{}}}", lang.files, lang.lines, lang.bytes)?;
+fn write_stats_json(j: &mut Jw<impl Write>, stats: &StatsOutput) -> io::Result<()> {
+    j.key("languages")?; j.arr_start()?;
+    for lang in &stats.languages {
+        j.arr_obj_start()?;
+        j.key_str("extension", &lang.extension)?;
+        j.key_int("files", lang.files)?;
+        j.key_int("lines", lang.lines)?;
+        j.key_int("bytes", lang.bytes)?;
+        j.obj_end()?;
     }
-    write!(w, "],\"totals\":{{\"files\":{},\"lines\":{},\"bytes\":{}}}",
-        stats.totals.files, stats.totals.lines, stats.totals.bytes)?;
-    write!(w, ",\"largest\":[")?;
-    for (i, file) in stats.largest.iter().enumerate() {
-        if i > 0 { write!(w, ",")?; }
-        write!(w, "{{\"path\":")?;
-        write_json_string(w, &file.path)?;
-        write!(w, ",\"lines\":{},\"bytes\":{}}}", file.lines, file.bytes)?;
+    j.arr_end()?;
+    j.key("totals")?; j.obj_start()?;
+    j.key_int("files", stats.totals.files)?;
+    j.key_int("lines", stats.totals.lines)?;
+    j.key_int("bytes", stats.totals.bytes)?;
+    j.obj_end()?;
+    j.key("largest")?; j.arr_start()?;
+    for file in &stats.largest {
+        j.arr_obj_start()?;
+        j.key_str("path", &file.path)?;
+        j.key_int("lines", file.lines)?;
+        j.key_int("bytes", file.bytes)?;
+        j.obj_end()?;
     }
-    write!(w, "]")
+    j.arr_end()
 }
 
-fn write_files_json(w: &mut impl Write, files: &[FileEntry]) -> io::Result<()> {
-    write!(w, "\"files\":[")?;
-    for (i, file) in files.iter().enumerate() {
-        if i > 0 { write!(w, ",")?; }
-        write!(w, "{{\"path\":")?;
-        write_json_string(w, &file.path)?;
-        if let Some(ref error) = file.error {
-            write!(w, ",\"error\":")?;
-            write_json_string(w, error)?;
-        }
-        if let Some(ref contents) = file.contents {
-            write!(w, ",\"contents\":")?;
-            write_json_string(w, contents)?;
-        }
+fn write_files_json(j: &mut Jw<impl Write>, files: &[FileEntry]) -> io::Result<()> {
+    j.key("files")?; j.arr_start()?;
+    for file in files {
+        j.arr_obj_start()?;
+        j.key_str("path", &file.path)?;
+        if let Some(ref error) = file.error { j.key_str("error", error)?; }
+        if let Some(ref contents) = file.contents { j.key_str("contents", contents)?; }
         if let Some(ref chunks) = file.chunks {
-            write!(w, ",\"chunks\":[")?;
-            for (j, chunk) in chunks.iter().enumerate() {
-                if j > 0 { write!(w, ",")?; }
-                write!(w, "{{\"startLine\":{},\"endLine\":{},\"content\":",
-                    chunk.start_line, chunk.end_line)?;
-                write_json_string(w, &chunk.content)?;
-                write!(w, "}}")?;
+            j.key("chunks")?; j.arr_start()?;
+            for chunk in chunks {
+                j.arr_obj_start()?;
+                j.key_int("startLine", chunk.start_line)?;
+                j.key_int("endLine", chunk.end_line)?;
+                j.key_str("content", &chunk.content)?;
+                j.obj_end()?;
             }
-            write!(w, "]")?;
+            j.arr_end()?;
         }
-        write!(w, "}}")?;
+        j.obj_end()?;
     }
-    write!(w, "]")
+    j.arr_end()
 }
 
 #[cfg(test)]
@@ -865,7 +834,7 @@ mod tests {
     #[test]
     fn write_files_with_contents() {
         let envelope = OutputEnvelope {
-            files: Some(vec![FileEntry {
+            payload: OutputPayload::Files(vec![FileEntry {
                 path: "src/main.rs".to_owned(),
                 contents: Some("fn main() {}".to_owned()),
                 error: None,
@@ -882,7 +851,7 @@ mod tests {
     #[test]
     fn write_files_with_chunks() {
         let envelope = OutputEnvelope {
-            files: Some(vec![FileEntry {
+            payload: OutputPayload::Files(vec![FileEntry {
                 path: "test.rs".to_owned(),
                 contents: None,
                 error: None,
@@ -903,7 +872,7 @@ mod tests {
     #[test]
     fn write_graph_output() {
         let envelope = OutputEnvelope {
-            graph: Some(vec![
+            payload: OutputPayload::Graph(vec![
                 GraphEntry { file: "a.rs".to_owned(), imports: vec!["b.rs".to_owned()] },
                 GraphEntry { file: "c.rs".to_owned(), imports: vec![] },
             ]),
@@ -919,20 +888,23 @@ mod tests {
     #[test]
     fn write_symbols_output() {
         let envelope = OutputEnvelope {
-            symbols: Some(vec![SymbolFile {
-                path: "test.rs".to_owned(),
-                symbols: vec![SymbolInfo {
-                    kind: "fn",
-                    name: "main".to_owned(),
-                    line: 1,
-                    end_line: 3,
-                    visibility: Some("pub"),
-                    parent: None,
-                    signature: "pub fn main() {".to_owned(),
-                    comment: None,
+            payload: OutputPayload::Symbols {
+                files: vec![SymbolFile {
+                    path: "test.rs".to_owned(),
+                    symbols: vec![SymbolInfo {
+                        kind: "fn",
+                        name: "main".to_owned(),
+                        line: 1,
+                        end_line: 3,
+                        visibility: Some("pub"),
+                        parent: None,
+                        signature: "pub fn main() {".to_owned(),
+                        comment: None,
+                    }],
+                    error: None,
                 }],
-                error: None,
-            }]),
+                compact: false,
+            },
             ..Default::default()
         };
         let s = output_to_string(&envelope);
@@ -946,7 +918,7 @@ mod tests {
     #[test]
     fn write_counts_output() {
         let envelope = OutputEnvelope {
-            counts: Some(vec![
+            payload: OutputPayload::Counts(vec![
                 CountEntry { path: "a.rs".to_owned(), count: 5 },
                 CountEntry { path: "b.rs".to_owned(), count: 3 },
             ]),
@@ -962,7 +934,7 @@ mod tests {
     #[test]
     fn write_stats_output() {
         let envelope = OutputEnvelope {
-            stats: Some(StatsOutput {
+            payload: OutputPayload::Stats(StatsOutput {
                 languages: vec![LangStats {
                     extension: "rs".to_owned(),
                     files: 10,
@@ -986,7 +958,7 @@ mod tests {
     #[test]
     fn write_tree_output() {
         let envelope = OutputEnvelope {
-            tree: Some(ScanResult {
+            payload: OutputPayload::Tree(ScanResult {
                 name: "project".to_owned(),
                 files: Some(vec!["README.md".to_owned()]),
                 children: Some(vec![ScanResult {
@@ -1166,7 +1138,7 @@ mod tests {
     #[test]
     fn json_graph() {
         let envelope = OutputEnvelope {
-            graph: Some(vec![
+            payload: OutputPayload::Graph(vec![
                 GraphEntry { file: "a.rs".to_owned(), imports: vec!["b.rs".to_owned()] },
             ]),
             ..Default::default()
@@ -1190,7 +1162,7 @@ mod tests {
     #[test]
     fn json_counts() {
         let envelope = OutputEnvelope {
-            counts: Some(vec![CountEntry { path: "a.rs".to_owned(), count: 5 }]),
+            payload: OutputPayload::Counts(vec![CountEntry { path: "a.rs".to_owned(), count: 5 }]),
             ..Default::default()
         };
         let s = output_to_json(&envelope);
@@ -1200,20 +1172,23 @@ mod tests {
     #[test]
     fn json_symbols() {
         let envelope = OutputEnvelope {
-            symbols: Some(vec![SymbolFile {
-                path: "test.rs".to_owned(),
-                symbols: vec![SymbolInfo {
-                    kind: "fn",
-                    name: "main".to_owned(),
-                    line: 1,
-                    end_line: 3,
-                    visibility: Some("pub"),
-                    parent: None,
-                    signature: "pub fn main() {".to_owned(),
-                    comment: None,
+            payload: OutputPayload::Symbols {
+                files: vec![SymbolFile {
+                    path: "test.rs".to_owned(),
+                    symbols: vec![SymbolInfo {
+                        kind: "fn",
+                        name: "main".to_owned(),
+                        line: 1,
+                        end_line: 3,
+                        visibility: Some("pub"),
+                        parent: None,
+                        signature: "pub fn main() {".to_owned(),
+                        comment: None,
+                    }],
+                    error: None,
                 }],
-                error: None,
-            }]),
+                compact: false,
+            },
             ..Default::default()
         };
         let s = output_to_json(&envelope);

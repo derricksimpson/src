@@ -133,7 +133,7 @@ pub fn extract_lines(
     }
 
     let mut groups: Vec<(&str, Vec<(usize, usize)>)> = grouped.into_iter().collect();
-    groups.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+    groups.sort_unstable_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
 
     let results: Vec<FileEntry> = groups
         .par_iter()
@@ -146,7 +146,7 @@ pub fn extract_lines(
         .collect();
 
     let mut results = results;
-    results.sort_by(|a, b| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()));
+    results.sort_unstable_by(|a, b| a.path.to_ascii_lowercase().cmp(&b.path.to_ascii_lowercase()));
     results
 }
 

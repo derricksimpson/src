@@ -26,8 +26,8 @@ fn read_file_mmap(path: &Path) -> Result<Option<String>, String> {
     if is_binary(data) {
         return Ok(None);
     }
-    let s = std::str::from_utf8(data).map_err(|_| "Not valid UTF-8".to_string())?;
-    Ok(Some(s.to_owned()))
+    std::str::from_utf8(data).map_err(|_| "Not valid UTF-8".to_string())?;
+    Ok(Some(String::from_utf8_lossy(data).into_owned()))
 }
 
 fn read_file_buffered(path: &Path) -> Result<Option<String>, String> {
@@ -38,10 +38,10 @@ fn read_file_buffered(path: &Path) -> Result<Option<String>, String> {
     if is_binary(&check_buf[..n]) {
         return Ok(None);
     }
-    let mut all = Vec::from(&check_buf[..n]);
+    let mut all = Vec::with_capacity(n + 4096);
+    all.extend_from_slice(&check_buf[..n]);
     reader.read_to_end(&mut all).map_err(|e| e.to_string())?;
-    let s = std::str::from_utf8(&all).map_err(|_| "Not valid UTF-8".to_string())?;
-    Ok(Some(s.to_owned()))
+    String::from_utf8(all).map(|s| Some(s)).map_err(|_| "Not valid UTF-8".to_string())
 }
 
 pub fn is_binary(data: &[u8]) -> bool {

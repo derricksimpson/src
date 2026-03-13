@@ -92,17 +92,25 @@ pub struct CallersOutput {
     pub files: Vec<CallerFile>,
 }
 
+pub enum OutputPayload {
+    None,
+    Tree(ScanResult),
+    Files(Vec<FileEntry>),
+    Graph(Vec<GraphEntry>),
+    Symbols { files: Vec<SymbolFile>, compact: bool },
+    Counts(Vec<CountEntry>),
+    Stats(StatsOutput),
+    Callers(CallersOutput),
+}
+
+impl Default for OutputPayload {
+    fn default() -> Self { OutputPayload::None }
+}
+
 #[derive(Default)]
 pub struct OutputEnvelope {
     pub meta: Option<MetaInfo>,
-    pub files: Option<Vec<FileEntry>>,
-    pub tree: Option<ScanResult>,
-    pub graph: Option<Vec<GraphEntry>>,
-    pub symbols: Option<Vec<SymbolFile>>,
-    pub counts: Option<Vec<CountEntry>>,
-    pub stats: Option<StatsOutput>,
-    pub callers: Option<CallersOutput>,
-    pub compact_symbols: bool,
+    pub payload: OutputPayload,
     pub errors: Option<Vec<String>>,
     pub error: Option<String>,
 }
