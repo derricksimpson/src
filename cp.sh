@@ -1,1 +1,0 @@
-cp ./target/release/src.exe  /c/Users/a1pro/AppData/Local/Microsoft/WindowsApps/src
