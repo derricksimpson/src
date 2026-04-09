@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rayon::prelude::*;
 
+use crate::alias::{self, AliasMapping};
 use crate::file_reader;
 use crate::lang;
 use crate::models::GraphEntry;
@@ -13,6 +14,7 @@ pub fn build_graph(
     file_paths: &[String],
     root: &Path,
     cancelled: &AtomicBool,
+    aliases: &[AliasMapping],
 ) -> Vec<GraphEntry> {
     let project_files: HashSet<String> = file_paths
         .iter()
@@ -25,7 +27,7 @@ pub fn build_graph(
             if cancelled.load(Ordering::Relaxed) {
                 return None;
             }
-            process_file(file_path, root, &project_files)
+            process_file(file_path, root, &project_files, aliases)
         })
         .collect();
 
@@ -37,6 +39,7 @@ fn process_file(
     file_path: &str,
     root: &Path,
     project_files: &HashSet<String>,
+    aliases: &[AliasMapping],
 ) -> Option<GraphEntry> {
     let path = Path::new(file_path);
     let relative = path_helper::normalized_relative(root, path);
@@ -63,18 +66,31 @@ fn process_file(
     let mut seen = HashSet::new();
 
     for candidate in &raw_imports {
-        let normalized = normalize_candidate(candidate);
-        if normalized == relative {
-            continue;
-        }
-        if normalized.ends_with('/') {
-            for pf in project_files.iter() {
-                if pf.starts_with(&normalized) && seen.insert(pf.clone()) {
-                    resolved.push(pf.clone());
+        if let Some(specifier) = candidate.strip_prefix(alias::ALIAS_PREFIX) {
+            let alias_candidates = alias::resolve_alias(specifier, aliases);
+            for ac in &alias_candidates {
+                let normalized = normalize_candidate(ac);
+                if normalized == relative {
+                    continue;
+                }
+                if project_files.contains(&normalized) && seen.insert(normalized.clone()) {
+                    resolved.push(normalized);
                 }
             }
-        } else if project_files.contains(&normalized) && seen.insert(normalized.clone()) {
-            resolved.push(normalized);
+        } else {
+            let normalized = normalize_candidate(candidate);
+            if normalized == relative {
+                continue;
+            }
+            if normalized.ends_with('/') {
+                for pf in project_files.iter() {
+                    if pf.starts_with(&normalized) && seen.insert(pf.clone()) {
+                        resolved.push(pf.clone());
+                    }
+                }
+            } else if project_files.contains(&normalized) && seen.insert(normalized.clone()) {
+                resolved.push(normalized);
+            }
         }
     }
 

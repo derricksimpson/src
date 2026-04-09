@@ -1,3 +1,4 @@
+mod alias;
 mod callers;
 mod cli;
 mod count;
@@ -328,7 +329,8 @@ fn execute_graph(
         Err(code) => return code,
     };
 
-    let graph_entries = graph::build_graph(&files, root, cancelled);
+    let aliases = alias::load_aliases(root);
+    let graph_entries = graph::build_graph(&files, root, cancelled, &aliases);
     let elapsed = start.elapsed().as_millis();
     let timed_out = cancelled.load(Ordering::Relaxed);
 

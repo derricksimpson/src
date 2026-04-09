@@ -985,3 +985,67 @@ fn combined_compact_with_find() {
     assert_eq!(code, 0);
     assert!(stdout.contains("fn add"));
 }
+
+// ── Alias resolution in graph mode ──
+
+fn alias_fixture() -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("alias_project")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn vite_fixture() -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("vite_project")
+        .to_string_lossy()
+        .into_owned()
+}
+
+#[test]
+fn graph_alias_resolves_at_slash() {
+    let (stdout, _, code) = run_src_in(&alias_fixture(), &["--graph", "-g", "*.ts", "-g", "*.tsx"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("graph:"));
+    assert!(stdout.contains("src/components/Button.tsx"));
+}
+
+#[test]
+fn graph_alias_resolves_tilde() {
+    let (stdout, _, code) = run_src_in(&alias_fixture(), &["--graph", "-g", "*.ts", "-g", "*.tsx"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("lib/api.ts"));
+}
+
+#[test]
+fn graph_alias_resolves_relative_still_works() {
+    let (stdout, _, code) = run_src_in(&alias_fixture(), &["--graph", "-g", "*.ts", "-g", "*.tsx"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("src/utils/helpers.ts"));
+}
+
+#[test]
+fn graph_alias_npm_not_included() {
+    let (stdout, _, code) = run_src_in(&alias_fixture(), &["--graph", "-g", "*.ts", "-g", "*.tsx"]);
+    assert_eq!(code, 0);
+    assert!(!stdout.contains("react"));
+}
+
+#[test]
+fn graph_vite_alias_resolves() {
+    let (stdout, _, code) = run_src_in(&vite_fixture(), &["--graph", "-g", "*.ts"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("graph:"));
+    assert!(stdout.contains("src/lib/util.ts"));
+}
+
+#[test]
+fn graph_no_tsconfig_still_works() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["--graph"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("graph:"));
+}

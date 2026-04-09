@@ -1,6 +1,7 @@
 use std::path::Path;
 use super::{LangImports, LangSymbols, SymbolInfo};
 use super::common::{self, CommentTracker};
+use crate::alias;
 
 pub struct TypeScriptImports;
 
@@ -20,6 +21,8 @@ impl LangImports for TypeScriptImports {
                 if path.starts_with("./") || path.starts_with("../") {
                     let resolved = resolve_relative(file_dir, path);
                     imports.extend(resolved);
+                } else if alias::is_potential_alias(path) {
+                    imports.push(format!("{}{}", alias::ALIAS_PREFIX, path));
                 }
             }
 
@@ -27,6 +30,8 @@ impl LangImports for TypeScriptImports {
                 if path.starts_with("./") || path.starts_with("../") {
                     let resolved = resolve_relative(file_dir, path);
                     imports.extend(resolved);
+                } else if alias::is_potential_alias(path) {
+                    imports.push(format!("{}{}", alias::ALIAS_PREFIX, path));
                 }
             }
         }
@@ -1052,5 +1057,64 @@ export default UserProfile;
         let content = "import { foo } from './utils.js';\n";
         let imports = extract_imports(content, "src/index.ts");
         assert!(imports.iter().any(|i| i.contains("utils")));
+    }
+
+    // ── Alias import tests ──
+
+    #[test]
+    fn alias_at_slash_import() {
+        let content = "import { Button } from '@/components/Button';\n";
+        let imports = extract_imports(content, "src/app.ts");
+        assert!(imports.iter().any(|i| i == "alias:@/components/Button"));
+    }
+
+    #[test]
+    fn alias_tilde_slash_import() {
+        let content = "import { api } from '~/utils/api';\n";
+        let imports = extract_imports(content, "src/app.ts");
+        assert!(imports.iter().any(|i| i == "alias:~/utils/api"));
+    }
+
+    #[test]
+    fn alias_npm_scoped_not_emitted() {
+        let content = "import { Component } from '@angular/core';\n";
+        let imports = extract_imports(content, "src/app.ts");
+        assert!(!imports.iter().any(|i| i.starts_with("alias:")));
+    }
+
+    #[test]
+    fn alias_bare_npm_not_emitted() {
+        let content = "import React from 'react';\n";
+        let imports = extract_imports(content, "src/app.ts");
+        assert!(!imports.iter().any(|i| i.starts_with("alias:")));
+    }
+
+    #[test]
+    fn alias_relative_still_resolved() {
+        let content = "import { Foo } from './foo';\n";
+        let imports = extract_imports(content, "src/app.ts");
+        assert!(!imports.iter().any(|i| i.starts_with("alias:")));
+        assert!(!imports.is_empty());
+    }
+
+    #[test]
+    fn alias_reexport() {
+        let content = "export { default } from '@/utils/foo';\n";
+        let imports = extract_imports(content, "src/index.ts");
+        assert!(imports.iter().any(|i| i == "alias:@/utils/foo"));
+    }
+
+    #[test]
+    fn alias_require() {
+        let content = "const config = require('@/config');\n";
+        let imports = extract_imports(content, "src/index.ts");
+        assert!(imports.iter().any(|i| i == "alias:@/config"));
+    }
+
+    #[test]
+    fn alias_custom_prefix() {
+        let content = "import { Util } from '@App/utils';\n";
+        let imports = extract_imports(content, "src/index.ts");
+        assert!(imports.iter().any(|i| i == "alias:@App/utils"));
     }
 }
