@@ -184,40 +184,111 @@ files:
 
 Use `-C` when you want grep-like focus but still need structured output.
 
-### 5. Pull the shape of a codebase before deeper analysis
+### 5. Map internal dependencies with `--graph`
+
+Use the graph when you need to understand which files depend on which local modules:
 
 ```bash
-src --stats
-src --graph -g "*.rs"
-src --symbols -g "*.rs" --compact
+src --graph -g "*.rs" -L 8
 ```
 
-Actual stats output from this repo:
+Actual output:
 
 ```yaml
 meta:
-  elapsedMs: 18
-  filesScanned: 36
-  filesMatched: 36
-languages:
-- extension: rs
-  files: 27
-  lines: 13690
-  bytes: 426979
-totals:
-  files: 36
-  lines: 14549
-  bytes: 455433
-largest:
-- path: src/yaml_output.rs
-  lines: 1200
-  bytes: 38695
-- path: src/lang/typescript.rs
-  lines: 1121
-  bytes: 37493
+  elapsedMs: 4
+  filesScanned: 27
+  filesMatched: 8
+graph:
+- file: src/alias.rs
+  imports:
+  - src/file_reader.rs
+- file: src/callers.rs
+  imports:
+  - src/file_reader.rs
+  - src/models.rs
+  - src/path_helper.rs
+  - src/searcher.rs
+  - src/symbols.rs
+- file: src/count.rs
+  imports:
+  - src/file_reader.rs
+  - src/models.rs
+  - src/path_helper.rs
+  - src/searcher.rs
 ```
 
-This is a strong opening move for unfamiliar repos.
+This is useful before changing a shared module because it shows internal coupling without external package noise.
+
+### 6. Scan declarations with `--symbols`
+
+Use symbols to get the public shape of files before reading implementations:
+
+```bash
+src --symbols -g "*.rs" --compact -L 5
+```
+
+Actual output:
+
+```yaml
+meta:
+  elapsedMs: 4
+  filesScanned: 27
+  filesMatched: 5
+symbols:
+- path: src/callers.rs
+  - fn find_callers :13:99
+- path: src/cli.rs
+  - struct CliArgs :2:25
+  - enum OutputFormatArg :28:31
+  - enum CliAction :34:38
+  - fn parse_args :40:219
+  - fn print_help :221:293
+- path: src/count.rs
+  - fn count_matches :11:31
+  - fn process_file :33:51
+```
+
+This gives you the outline first: file, declaration kind, name, and line range.
+
+### 7. Roll multiple file reads into one command
+
+Instead of three separate file reads, batch exact ranges into one `--lines` call:
+
+```bash
+src --lines "src/main.rs:157:203 src/cli.rs:221:293 src/models.rs:95:116"
+```
+
+Actual output shape:
+
+```yaml
+meta:
+  filesMatched: 3
+files:
+- path: src/cli.rs
+  chunks:
+  - startLine: 221
+    endLine: 293
+    content: |
+      221.  pub fn print_help() {
+      ...
+- path: src/main.rs
+  chunks:
+  - startLine: 157
+    endLine: 203
+    content: |
+      157.  fn execute(args: cli::CliArgs) -> i32 {
+      ...
+- path: src/models.rs
+  chunks:
+  - startLine: 95
+    endLine: 116
+    content: |
+      95.  pub enum OutputPayload {
+      ...
+```
+
+This is the core agent workflow: one command returns several focused source ranges in a stable, structured response.
 
 ## Modes
 
