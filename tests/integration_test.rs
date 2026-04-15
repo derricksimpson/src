@@ -137,6 +137,21 @@ fn file_listing_multiple_globs_mixed() {
 }
 
 #[test]
+fn file_listing_bracket_slug_path() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "pages/[slug].astro"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("pages/[slug].astro"));
+}
+
+#[test]
+fn file_listing_multiple_globs_single_flag_with_bracket_path() {
+    let (stdout, _, code) = run_src_in(&fixture(), &["-g", "*.rs", "pages/[slug].astro"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("main.rs"));
+    assert!(stdout.contains("pages/[slug].astro"));
+}
+
+#[test]
 fn file_listing_no_matches() {
     let (stdout, _, code) = run_src_in(&fixture(), &["--r", "*.xyz"]);
     assert_eq!(code, 0);
@@ -259,6 +274,17 @@ fn lines_extraction_multiple_files() {
     assert_eq!(code, 0);
     assert!(stdout.contains("main.rs"));
     assert!(stdout.contains("utils.ts"));
+}
+
+#[test]
+fn lines_extraction_multiple_args_with_bracket_path() {
+    let (stdout, _, code) = run_src_in(
+        &fixture(),
+        &["--lines", "src/main.rs:1:3", "pages/[slug].astro:1:3"],
+    );
+    assert_eq!(code, 0);
+    assert!(stdout.contains("main.rs"));
+    assert!(stdout.contains("pages/[slug].astro"));
 }
 
 #[test]
