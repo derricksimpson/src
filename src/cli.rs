@@ -37,6 +37,25 @@ pub enum CliAction {
     Version,
 }
 
+fn collect_option_values(args: &[String], i: &mut usize, flag: &str) -> Result<Vec<String>, String> {
+    *i += 1;
+    if *i >= args.len() {
+        return Err(format!("Missing value for {}", flag));
+    }
+    if args[*i].starts_with('-') {
+        return Err(format!("Missing value for {}", flag));
+    }
+
+    let mut values = Vec::new();
+    while *i < args.len() && !args[*i].starts_with('-') {
+        values.push(args[*i].clone());
+        *i += 1;
+    }
+    *i -= 1;
+
+    Ok(values)
+}
+
 pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
     let mut root: Option<String> = None;
     let mut globs = Vec::new();
@@ -70,9 +89,8 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 root = Some(args[i].clone());
             }
             "--glob" | "--r" | "-g" => {
-                i += 1;
-                if i >= args.len() { return Err("Missing value for --glob".into()); }
-                globs.push(args[i].clone());
+                let values = collect_option_values(args, &mut i, "--glob")?;
+                globs.extend(values);
             }
             "--find" | "--f" | "-f" => {
                 i += 1;
@@ -108,10 +126,11 @@ pub fn parse_args(args: &[String]) -> Result<CliAction, String> {
                 }
             }
             "--lines" => {
-                i += 1;
-                if i >= args.len() { return Err("Missing value for --lines".into()); }
-                for spec in args[i].split_whitespace() {
-                    lines.push(spec.to_owned());
+                let values = collect_option_values(args, &mut i, "--lines")?;
+                for value in values {
+                    for spec in value.split_whitespace() {
+                        lines.push(spec.to_owned());
+                    }
                 }
             }
             "--graph" => graph = true,
@@ -229,7 +248,7 @@ Modes:
   (default)               Show directory hierarchy containing source files
   --glob, -g <glob>       List files matching glob patterns (repeatable)
   --find, -f <pattern>    Search file contents for a pattern
-  --lines "<specs>"       Extract specific line ranges from files
+  --lines <specs>         Extract specific line ranges from files
   --graph                 Show project-internal dependency graph
   --symbols, -s           Extract symbol declarations from source files
   --callers <name>        Find all references/call sites for a symbol
@@ -237,9 +256,9 @@ Modes:
 
 Options:
   --dir, -d <path>        Root directory (default: current directory)
-  --glob, -g <glob>       File glob pattern (repeatable, e.g. -g *.ts -g *.cs)
+  --glob, -g <glob>       File glob pattern (repeatable; -g *.ts *.tsx also works)
   --find, -f <pattern>    Search pattern (use | for OR, e.g. Payment|Invoice)
-  --lines "<specs>"       Line specs: "file:start:end file2:start:end" (repeatable)
+  --lines <specs>         Line specs: file:start:end file2:start:end (repeatable)
   --graph                 Emit source dependency graph
   --symbols, -s           Extract symbol declarations (compact: signature :start:end)
   --callers <name>        Find declaration and all call sites for a symbol name
@@ -402,6 +421,14 @@ mod tests {
     }
 
     #[test]
+    fn multiple_globs_in_single_flag() {
+        match parse_args(&args(&["-g", "*.rs", "*.ts", "*.go"])).unwrap() {
+            CliAction::Run(a) => assert_eq!(a.globs, vec!["*.rs", "*.ts", "*.go"]),
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
     fn search_pattern() {
         match parse_args(&args(&["--f", "pub fn"])).unwrap() {
             CliAction::Run(a) => {
@@ -520,6 +547,26 @@ mod tests {
         match parse_args(&args(&["--lines", "src/main.rs:1:20 src/cli.rs:10:30"])).unwrap() {
             CliAction::Run(a) => {
                 assert_eq!(a.lines, vec!["src/main.rs:1:20", "src/cli.rs:10:30"]);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn lines_option_multiple_args_without_quotes() {
+        match parse_args(&args(&["--lines", "src/main.rs:1:20", "src/cli.rs:10:30"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.lines, vec!["src/main.rs:1:20", "src/cli.rs:10:30"]);
+            }
+            _ => panic!("Expected Run"),
+        }
+    }
+
+    #[test]
+    fn lines_option_with_bracket_path() {
+        match parse_args(&args(&["--lines", "pages/[slug].astro:1:10"])).unwrap() {
+            CliAction::Run(a) => {
+                assert_eq!(a.lines, vec!["pages/[slug].astro:1:10"]);
             }
             _ => panic!("Expected Run"),
         }
