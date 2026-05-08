@@ -61,8 +61,7 @@ src --stats
 Count where a state hook or factory shows up:
 
 ```bash
-src -d U:\Users\source\churchofchristapp\ui \
-  -g "*.ts" -g "*.tsx" \
+src -g "*.ts" -g "*.tsx" \
   -f "useMemberStore|create" \
   -c -L 8
 ```
@@ -76,14 +75,14 @@ meta:
   filesMatched: 4
   totalMatches: 16
 files:
-- path: src/api/memberApiClient.ts
-  count: 2
-- path: src/main.tsx
-  count: 2
-- path: src/screens/ClassesScreen.tsx
-  count: 6
-- path: src/stores/memberAppStore.ts
-  count: 6
+  - path: src/api/memberApiClient.ts
+    count: 2
+  - path: src/main.tsx
+    count: 2
+  - path: src/screens/ClassesScreen.tsx
+    count: 6
+  - path: src/stores/memberAppStore.ts
+    count: 6
 ```
 
 This is the fast first pass before reading anything.
@@ -103,20 +102,20 @@ meta:
   elapsedMs: 1
   filesMatched: 1
 files:
-- path: src/main.rs
-  chunks:
-  - startLine: 157
-    endLine: 203
-    content: |
-      157.  fn execute(args: cli::CliArgs) -> i32 {
-      158.      let root = Path::new(&args.root);
-      159.      let format = resolve_format(&args);
-      ...
-      184.      if !args.lines.is_empty() {
-      185.          execute_lines(&args, root, &cancelled, start, format)
-      186.      } else if args.graph {
-      ...
-      203.  }
+  - path: src/main.rs
+    chunks:
+      - startLine: 157
+        endLine: 203
+        content: |
+          157.  fn execute(args: cli::CliArgs) -> i32 {
+          158.      let root = Path::new(&args.root);
+          159.      let format = resolve_format(&args);
+          ...
+          184.      if !args.lines.is_empty() {
+          185.          execute_lines(&args, root, &cancelled, start, format)
+          186.      } else if args.graph {
+          ...
+          203.  }
 ```
 
 This is useful when another tool or stack trace only gives you a line number.
@@ -138,21 +137,21 @@ meta:
   filesMatched: 8
   totalMatches: 11
 declarations:
-- path: src/count.rs
-  line: 33
-  signature: "fn process_file(file_path: &str, root: &Path, matcher: &Matcher) -> Option<CountEntry> {"
-- path: src/graph.rs
-  line: 38
-  signature: fn process_file(
+  - path: src/count.rs
+    line: 33
+    signature: "fn process_file(file_path: &str, root: &Path, matcher: &Matcher) -> Option<CountEntry> {"
+  - path: src/graph.rs
+    line: 38
+    signature: fn process_file(
 callers:
-- path: src/count.rs
-  sites:
-  - line: 23
-    content: process_file(file_path, root, matcher)
-- path: src/searcher.rs
-  sites:
-  - line: 96
-    content: process_file(file_path, root, matcher, line_numbers, context)
+  - path: src/count.rs
+    sites:
+      - line: 23
+        content: process_file(file_path, root, matcher)
+  - path: src/searcher.rs
+    sites:
+      - line: 96
+        content: process_file(file_path, root, matcher, line_numbers, context)
 ```
 
 This is the quickest way to answer "where is this declared, and who actually uses it?"
@@ -169,17 +168,17 @@ Actual output:
 
 ```yaml
 files:
-- path: src/cli.rs
-  chunks:
-  - startLine: 143
-    endLine: 148
-    content: |
-      143.              }
-      144.              "--compact" => compact = true,
-      145.              "--with-comments" => with_comments = true,
-      146.              "--with-tests" => with_tests = true,
-      147.              "--auto-expand" => auto_expand = true,
-      148.              "--output" | "-o" => {
+  - path: src/cli.rs
+    chunks:
+      - startLine: 143
+        endLine: 148
+        content: |
+          143.              }
+          144.              "--compact" => compact = true,
+          145.              "--with-comments" => with_comments = true,
+          146.              "--with-tests" => with_tests = true,
+          147.              "--auto-expand" => auto_expand = true,
+          148.              "--output" | "-o" => {
 ```
 
 Use `-C` when you want grep-like focus but still need structured output.
@@ -200,22 +199,22 @@ meta:
   filesScanned: 27
   filesMatched: 8
 graph:
-- file: src/alias.rs
-  imports:
-  - src/file_reader.rs
-- file: src/callers.rs
-  imports:
-  - src/file_reader.rs
-  - src/models.rs
-  - src/path_helper.rs
-  - src/searcher.rs
-  - src/symbols.rs
-- file: src/count.rs
-  imports:
-  - src/file_reader.rs
-  - src/models.rs
-  - src/path_helper.rs
-  - src/searcher.rs
+  - file: src/alias.rs
+    imports:
+      - src/file_reader.rs
+  - file: src/callers.rs
+    imports:
+      - src/file_reader.rs
+      - src/models.rs
+      - src/path_helper.rs
+      - src/searcher.rs
+      - src/symbols.rs
+  - file: src/count.rs
+    imports:
+      - src/file_reader.rs
+      - src/models.rs
+      - src/path_helper.rs
+      - src/searcher.rs
 ```
 
 This is useful before changing a shared module because it shows internal coupling without external package noise.
@@ -265,69 +264,69 @@ Actual output shape:
 meta:
   filesMatched: 3
 files:
-- path: src/cli.rs
-  chunks:
-  - startLine: 221
-    endLine: 293
-    content: |
-      221.  pub fn print_help() {
-      ...
-- path: src/main.rs
-  chunks:
-  - startLine: 157
-    endLine: 203
-    content: |
-      157.  fn execute(args: cli::CliArgs) -> i32 {
-      ...
-- path: src/models.rs
-  chunks:
-  - startLine: 95
-    endLine: 116
-    content: |
-      95.  pub enum OutputPayload {
-      ...
+  - path: src/cli.rs
+    chunks:
+      - startLine: 221
+        endLine: 293
+        content: |
+          221.  pub fn print_help() {
+          ...
+  - path: src/main.rs
+    chunks:
+      - startLine: 157
+        endLine: 203
+        content: |
+          157.  fn execute(args: cli::CliArgs) -> i32 {
+          ...
+  - path: src/models.rs
+    chunks:
+      - startLine: 95
+        endLine: 116
+        content: |
+          95.  pub enum OutputPayload {
+          ...
 ```
 
 This is the core agent workflow: one command returns several focused source ranges in a stable, structured response.
 
 ## Modes
 
-| Mode | Command | What it returns |
-|------|---------|-----------------|
-| Tree | `src` | Directory hierarchy of source files |
-| Glob | `src -g "*.ts"` | Flat file list |
-| Find | `src -f "auth|token"` | Matching files with full contents |
-| Find with context | `src -f "auth|token" -C 3` | Matching files with focused chunks |
-| Count | `src -f "auth|token" -c` | Match counts per file |
-| Lines | `src --lines "a.rs:1:30 b.ts:40:90"` | Exact ranges from multiple files |
+| Mode              | Command                                  | What it returns                               |
+| ----------------- | ---------------------------------------- | --------------------------------------------- | ---------------------------------- |
+| Tree              | `src`                                    | Directory hierarchy of source files           |
+| Glob              | `src -g "*.ts"`                          | Flat file list                                |
+| Find              | `src -f "auth                            | token"`                                       | Matching files with full contents  |
+| Find with context | `src -f "auth                            | token" -C 3`                                  | Matching files with focused chunks |
+| Count             | `src -f "auth                            | token" -c`                                    | Match counts per file              |
+| Lines             | `src --lines "a.rs:1:30 b.ts:40:90"`     | Exact ranges from multiple files              |
 | Lines auto-expand | `src --lines "a.rs:88:88" --auto-expand` | Full enclosing symbol for the referenced line |
-| Graph | `src --graph` | Project-internal dependency/import map |
-| Symbols | `src --symbols -g "*.rs"` | Symbol declarations with ranges |
-| Compact symbols | `src --symbols --compact` | Condensed declaration listing |
-| Callers | `src --callers handleAuth` | Declarations plus call sites |
-| Stats | `src --stats` | File, line, byte, and hotspot summary |
+| Graph             | `src --graph`                            | Project-internal dependency/import map        |
+| Symbols           | `src --symbols -g "*.rs"`                | Symbol declarations with ranges               |
+| Compact symbols   | `src --symbols --compact`                | Condensed declaration listing                 |
+| Callers           | `src --callers handleAuth`               | Declarations plus call sites                  |
+| Stats             | `src --stats`                            | File, line, byte, and hotspot summary         |
 
 ## Flags That Matter In Practice
 
-| Flag | Meaning |
-|------|---------|
-| `--dir`, `-d <path>` | Scan another repo without changing directories |
-| `--glob`, `-g <pattern>` | Restrict by file pattern; repeatable |
-| `--find`, `-f <pattern>` | Search contents; `|` works as a literal OR |
-| `--regex`, `-E` | Treat `--find` as regex |
-| `--count`, `-c` | Return counts instead of file contents |
-| `--context`, `-C <n>` | Return match windows instead of full files |
-| `--lines "<specs>"` | Extract exact file ranges in one call |
-| `--auto-expand` | Expand a `--lines` location to the enclosing symbol |
-| `--graph` | Build an internal dependency graph |
-| `--symbols`, `-s` | Extract declarations |
-| `--compact` | Condense symbol output for scanning |
-| `--with-comments` | Include doc comments in symbol output |
-| `--with-tests` | Include test files normally skipped by source scanning |
-| `--callers <name>` | Find declaration(s) and call sites for a symbol |
-| `--limit`, `-L <n>` | Cap result size |
-| `--json` | Emit JSON instead of YAML |
-| `--output`, `-o <path>` | Save results as an artifact |
+| Flag                     | Meaning                                                |
+| ------------------------ | ------------------------------------------------------ | ----------------------- |
+| `--dir`, `-d <path>`     | Scan another repo without changing directories         |
+| `--glob`, `-g <pattern>` | Restrict by file pattern; repeatable                   |
+| `--find`, `-f <pattern>` | Search contents; `                                     | ` works as a literal OR |
+| `--regex`, `-E`          | Treat `--find` as regex                                |
+| `--count`, `-c`          | Return counts instead of file contents                 |
+| `--context`, `-C <n>`    | Return match windows instead of full files             |
+| `--lines "<specs>"`      | Extract exact file ranges in one call                  |
+| `--auto-expand`          | Expand a `--lines` location to the enclosing symbol    |
+| `--graph`                | Build an internal dependency graph                     |
+| `--symbols`, `-s`        | Extract declarations                                   |
+| `--compact`              | Condense symbol output for scanning                    |
+| `--with-comments`        | Include doc comments in symbol output                  |
+| `--with-tests`           | Include test files normally skipped by source scanning |
+| `--callers <name>`       | Find declaration(s) and call sites for a symbol        |
+| `--limit`, `-L <n>`      | Cap result size                                        |
+| `--json`                 | Emit JSON instead of YAML                              |
+| `--output`, `-o <path>`  | Save results as an artifact                            |
 
 ## Output Shape
 
@@ -340,13 +339,13 @@ meta:
   filesMatched: 28
   totalMatches: 44
 files:
-- path: src/payments/service.ts
-  chunks:
-  - startLine: 118
-    endLine: 132
-    content: |
-      118.  export async function createInvoice(...) {
-      ...
+  - path: src/payments/service.ts
+    chunks:
+      - startLine: 118
+        endLine: 132
+        content: |
+          118.  export async function createInvoice(...) {
+          ...
 ```
 
 Switch to JSON when you want to pipe the results somewhere else:
